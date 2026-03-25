@@ -128,6 +128,7 @@ server {
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
         fastcgi_index index.php;
         include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
 
         # FastCGI Cache
         fastcgi_cache WPCACHE;
