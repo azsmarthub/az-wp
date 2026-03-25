@@ -1049,8 +1049,9 @@ menu_phpmyadmin() {
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
     # phpMyAdmin — managed by az-wp
-    location ${pma_path} {
-        alias /usr/share/phpmyadmin;
+    location ${pma_path}/ {
+        alias /usr/share/phpmyadmin/;
+        index index.php;
         auth_basic "Restricted";
         auth_basic_user_file ${htpasswd_file};
         location ~ \.php\$ {
