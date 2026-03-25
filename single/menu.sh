@@ -1063,25 +1063,61 @@ FPMPOOL
 
             # Create nginx snippet — token-based access
             # Use ^~ to override regex static file matching
+            # Create PHP auth gate — sets cookie then redirects to PMA
+            local pma_gate="/usr/share/phpmyadmin/az-wp-gate.php"
+            cat > "$pma_gate" <<'GATEPHP'
+<?php
+// az-wp token gate — sets cookie and redirects to phpMyAdmin
+$token = $_GET['token'] ?? '';
+GATEPHP
+            cat >> "$pma_gate" <<GATEPHP2
+\$valid_token = '${pma_token}';
+\$pma_path = '${pma_path}';
+GATEPHP2
+            cat >> "$pma_gate" <<'GATEPHP3'
+if ($token !== $valid_token) {
+    http_response_code(403);
+    die('Access denied.');
+}
+setcookie('pma_auth', $token, [
+    'path' => $pma_path . '/',
+    'httponly' => true,
+    'secure' => true,
+    'samesite' => 'Lax',
+]);
+header('Location: ' . $pma_path . '/index.php');
+exit;
+GATEPHP3
+
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
-    # phpMyAdmin — managed by az-wp (token-based access + cookie session)
+    # phpMyAdmin — managed by az-wp (cookie-based access)
+
+    # Entry point: /pma-xxx/?token=XXX → sets cookie → redirects to index.php
+    location = ${pma_path}/ {
+        alias /usr/share/phpmyadmin/;
+        # If token param present, go through gate PHP to set cookie
+        if (\$arg_token) {
+            rewrite ^ ${pma_path}/az-wp-gate.php?\$args last;
+        }
+        # No token, no cookie → 403
+        if (\$cookie_pma_auth != "${pma_token}") {
+            return 403;
+        }
+        index index.php;
+    }
+
+    # phpMyAdmin files — require valid cookie
     location ^~ ${pma_path}/ {
+        # Check cookie
+        if (\$cookie_pma_auth != "${pma_token}") {
+            return 403;
+        }
+
         alias /usr/share/phpmyadmin/;
         index index.php;
 
-        # Set cookie when token is in URL (first visit)
-        if (\$arg_token = "${pma_token}") {
-            add_header Set-Cookie "pma_auth=${pma_token}; Path=${pma_path}/; HttpOnly; Secure; SameSite=Lax" always;
-        }
-
         location ~ \.php\$ {
-            # Allow if: token in URL OR valid cookie
-            set \$pma_allow 0;
-            if (\$arg_token = "${pma_token}") { set \$pma_allow 1; }
-            if (\$cookie_pma_auth = "${pma_token}") { set \$pma_allow 1; }
-            if (\$pma_allow = 0) { return 403; }
-
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
             fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-pma.sock;
