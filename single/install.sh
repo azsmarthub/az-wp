@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Ensure stdin is from terminal (needed when piped via curl | bash)
+# Must happen BEFORE set -e to allow graceful failure
 # ---------------------------------------------------------------------------
-if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
-    exec 0</dev/tty
+if [[ ! -t 0 ]]; then
+    exec 0</dev/tty 2>/dev/null || true
 fi
+
+set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Resolve paths
