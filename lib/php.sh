@@ -28,7 +28,6 @@ install_php() {
         "php${PHP_VERSION}-iconv" \
         "php${PHP_VERSION}-soap" \
         "php${PHP_VERSION}-bcmath" \
-        "php${PHP_VERSION}-opcache" \
         "php${PHP_VERSION}-redis" \
         "php${PHP_VERSION}-igbinary" \
         > /dev/null 2>&1
