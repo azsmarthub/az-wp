@@ -777,9 +777,13 @@ menu_advanced() {
                     ;;
                 fpm)
                     printf "\n  ${BOLD}Web pool:${NC}\n"
-                    curl -sf http://127.0.0.1/fpm-status 2>/dev/null | sed 's/^/  /' || printf "  (not accessible — check nginx fpm-status location)\n"
+                    curl -sfk --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/fpm-status" 2>/dev/null | sed 's/^/  /' \
+                        || curl -sf http://127.0.0.1/fpm-status 2>/dev/null | sed 's/^/  /' \
+                        || printf "  (not accessible)\n"
                     printf "\n  ${BOLD}Workers pool:${NC}\n"
-                    curl -sf http://127.0.0.1/fpm-workers-status 2>/dev/null | sed 's/^/  /' || printf "  (not accessible — check nginx fpm-workers-status location)\n"
+                    curl -sfk --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/fpm-workers-status" 2>/dev/null | sed 's/^/  /' \
+                        || curl -sf http://127.0.0.1/fpm-workers-status 2>/dev/null | sed 's/^/  /' \
+                        || printf "  (not accessible)\n"
                     ;;
                 opcache)
                     # Query OPcache via FPM (CLI has opcache disabled)
