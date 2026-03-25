@@ -93,30 +93,29 @@ check_dns() {
 # Generate self-signed certificate (for Cloudflare Full mode)
 # ---------------------------------------------------------------------------
 _generate_self_signed() {
-    local ssl_dir="/etc/ssl/az-wp"
-    mkdir -p "$ssl_dir"
+    _SSL_DIR="/etc/ssl/az-wp"
+    mkdir -p "$_SSL_DIR"
 
     log_sub "Generating self-signed SSL certificate for Cloudflare..."
 
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$ssl_dir/${DOMAIN}.key" \
-        -out "$ssl_dir/${DOMAIN}.crt" \
+        -keyout "$_SSL_DIR/${DOMAIN}.key" \
+        -out "$_SSL_DIR/${DOMAIN}.crt" \
         -subj "/CN=${DOMAIN}" \
         -addext "subjectAltName=DNS:${DOMAIN},DNS:www.${DOMAIN}" \
         2>/dev/null
 
-    chmod 600 "$ssl_dir/${DOMAIN}.key"
-    chmod 644 "$ssl_dir/${DOMAIN}.crt"
+    chmod 600 "$_SSL_DIR/${DOMAIN}.key"
+    chmod 644 "$_SSL_DIR/${DOMAIN}.crt"
 
     log_sub "Self-signed cert created (valid 10 years)"
-    echo "$ssl_dir"
 }
 
 # ---------------------------------------------------------------------------
 # Configure Nginx SSL block (for self-signed cert)
 # ---------------------------------------------------------------------------
 _configure_nginx_ssl() {
-    local ssl_dir="$1"
+    local ssl_dir="$_SSL_DIR"
     local nginx_conf="/etc/nginx/sites-available/${DOMAIN}.conf"
 
     if [[ ! -f "$nginx_conf" ]]; then
@@ -224,10 +223,8 @@ _issue_letsencrypt() {
 # Self-signed SSL (Cloudflare proxy or fallback)
 # ---------------------------------------------------------------------------
 _issue_cloudflare_ssl() {
-    local ssl_dir
-    ssl_dir="$(_generate_self_signed)"
-
-    _configure_nginx_ssl "$ssl_dir"
+    _generate_self_signed
+    _configure_nginx_ssl
 
     if nginx -t 2>/dev/null; then
         service_reload nginx
