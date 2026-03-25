@@ -130,14 +130,22 @@ _configure_nginx_ssl() {
         return 0
     fi
 
-    # Add SSL to existing server block:
-    # After "listen 80;" add "listen 443 ssl;" and SSL cert paths
-    sed -i '/listen 80;/a \    listen 443 ssl;\n    listen [::]:443 ssl;\n    http2 on;\n    ssl_certificate '"$ssl_dir/${DOMAIN}.crt"';\n    ssl_certificate_key '"$ssl_dir/${DOMAIN}.key"';\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;' "$nginx_conf"
+    # Insert SSL directives after first "listen 80;" line
+    local ssl_block
+    ssl_block="    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    ssl_certificate ${ssl_dir}/${DOMAIN}.crt;
+    ssl_certificate_key ${ssl_dir}/${DOMAIN}.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    add_header Strict-Transport-Security \"max-age=63072000\" always;"
 
-    # Add HSTS header
-    if ! grep -q "Strict-Transport-Security" "$nginx_conf"; then
-        sed -i '/server_tokens off;/a \    add_header Strict-Transport-Security "max-age=63072000" always;' "$nginx_conf"
-    fi
+    # Use awk to insert after first "listen 80;"
+    awk -v block="$ssl_block" '
+        /listen 80;/ && !done { print; print block; done=1; next }
+        { print }
+    ' "$nginx_conf" > "${nginx_conf}.tmp" && mv "${nginx_conf}.tmp" "$nginx_conf"
 
     log_sub "Nginx SSL configured with self-signed certificate."
 }
