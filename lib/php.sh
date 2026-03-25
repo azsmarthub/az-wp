@@ -11,8 +11,8 @@ install_php() {
     add-apt-repository ppa:ondrej/php -y 2>&1 | grep -E "^(Adding|More info)" | head -2
     apt-get update -qq 2>/dev/null
 
-    log_sub "Installing PHP ${PHP_VERSION} + 16 extensions..."
-    apt-get install -y -q \
+    log_sub "Installing PHP ${PHP_VERSION} + 16 extensions (this may take 1-2 minutes)..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
         "php${PHP_VERSION}-fpm" \
         "php${PHP_VERSION}-cli" \
         "php${PHP_VERSION}-curl" \
@@ -31,7 +31,7 @@ install_php() {
         "php${PHP_VERSION}-opcache" \
         "php${PHP_VERSION}-redis" \
         "php${PHP_VERSION}-igbinary" \
-        2>&1 | grep -E "^(Setting up php)" | tail -5 || true
+        > /dev/null 2>&1
 
     systemctl enable "php${PHP_VERSION}-fpm" 2>/dev/null
 

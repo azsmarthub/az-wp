@@ -7,7 +7,7 @@ _AZ_FIREWALL_LOADED=1
 # UFW Firewall
 # ---------------------------------------------------------------------------
 setup_ufw() {
-    apt-get install -y -q ufw 2>&1 | grep -E "^(Setting up)" | tail -3 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ufw > /dev/null 2>&1
 
     local ssh_port
     ssh_port="$(state_get SSH_PORT)" || ssh_port="22"
@@ -26,7 +26,7 @@ setup_ufw() {
 # Fail2Ban
 # ---------------------------------------------------------------------------
 setup_fail2ban() {
-    apt-get install -y -q fail2ban 2>&1 | grep -E "^(Setting up)" | tail -3 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban > /dev/null 2>&1
 
     local ssh_port
     ssh_port="$(state_get SSH_PORT)" || ssh_port="22"

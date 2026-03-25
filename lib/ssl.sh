@@ -9,7 +9,7 @@ _AZ_SSL_LOADED=1
 install_certbot() {
     log_sub "Installing Certbot..."
 
-    apt-get install -y -q certbot python3-certbot-nginx 2>&1 | grep -E "^(Setting up)" | tail -3 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx > /dev/null 2>&1
 
     log_sub "Certbot installed."
 }
