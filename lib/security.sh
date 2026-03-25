@@ -14,11 +14,12 @@ harden_ssh() {
         log_sub "Backed up sshd_config"
     fi
 
-    # Disable root login only if a non-root SITE_USER exists with sudo
-    if [[ -n "${SITE_USER:-}" ]] && id "$SITE_USER" &>/dev/null; then
-        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$sshd_config"
-        log_sub "PermitRootLogin set to no"
-    fi
+    # Do NOT disable root login automatically — the site user has no
+    # sudo access and no SSH password. Disabling root would lock out
+    # the only way to manage the server. Users can disable root login
+    # manually via 'az-wp security' after setting up SSH keys.
+    # sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$sshd_config"
+    log_sub "PermitRootLogin: kept as-is (disable manually after setting up SSH keys)"
 
     sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 5/' "$sshd_config"
     sed -i 's/^#\?X11Forwarding.*/X11Forwarding no/' "$sshd_config"
