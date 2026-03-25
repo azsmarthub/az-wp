@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ssl.sh — SSL certificate management
-# Handles both direct DNS and Cloudflare proxy automatically
+# ssl.sh — SSL certificate management via Let's Encrypt
+# Works with both direct DNS and Cloudflare proxy (HTTP-01 challenge via port 80)
 [[ -n "${_AZ_SSL_LOADED:-}" ]] && return 0
 _AZ_SSL_LOADED=1
 
@@ -8,8 +8,8 @@ _AZ_SSL_LOADED=1
 # Install Certbot
 # ---------------------------------------------------------------------------
 install_certbot() {
-    log_sub "Installing Certbot + openssl..."
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx openssl > /dev/null 2>&1
+    log_sub "Installing Certbot..."
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx > /dev/null 2>&1
     log_sub "Certbot installed."
 }
 
@@ -28,29 +28,10 @@ _resolve_domain() {
 }
 
 # ---------------------------------------------------------------------------
-# Detect if domain uses Cloudflare proxy
-# ---------------------------------------------------------------------------
-_is_cloudflare() {
-    local domain_ip="$1"
-    # Cloudflare IP ranges (common prefixes)
-    # Full list: https://www.cloudflare.com/ips/
-    local cf_ranges="103.21. 103.22. 103.31. 104.16. 104.17. 104.18. 104.19. 104.20. 104.21. 104.22. 104.23. 104.24. 104.25. 104.26. 104.27. 108.162. 131.0. 141.101. 162.158. 172.64. 172.65. 172.66. 172.67. 172.68. 172.69. 172.70. 172.71. 173.245. 188.114. 190.93. 197.234. 198.41."
-    local prefix
-    for prefix in $cf_ranges; do
-        if [[ "$domain_ip" == ${prefix}* ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-# ---------------------------------------------------------------------------
-# Check DNS and determine SSL strategy
-# Sets: DNS_MODE = "direct" | "cloudflare" | "unresolvable"
+# Check if domain resolves (direct or Cloudflare — both OK for HTTP-01)
 # ---------------------------------------------------------------------------
 check_dns() {
     local domain_ip=""
-    DNS_MODE="unresolvable"
     WWW_RESOLVES=false
 
     log_sub "Checking DNS for $DOMAIN ..."
@@ -62,135 +43,57 @@ check_dns() {
         return 1
     fi
 
-    # Check if IP matches VPS directly
-    if [[ "$domain_ip" == "$PUBLIC_IP" ]]; then
-        DNS_MODE="direct"
-        log_sub "$DOMAIN → $domain_ip (direct to this VPS)"
+    log_sub "$DOMAIN → $domain_ip"
 
-        # Check www
-        local www_ip
-        www_ip="$(_resolve_domain "www.${DOMAIN}")"
-        if [[ "$www_ip" == "$PUBLIC_IP" ]]; then
-            WWW_RESOLVES=true
-            log_sub "www.${DOMAIN} also resolves correctly."
-        fi
-        return 0
+    # Verify HTTP reachability (port 80) — this is what certbot needs
+    if curl -sf --max-time 10 -o /dev/null "http://${DOMAIN}/" 2>/dev/null; then
+        log_sub "HTTP reachable via port 80 (certbot will work)"
+    else
+        log_warn "HTTP not reachable on $DOMAIN — certbot may fail"
     fi
 
-    # Check if IP is Cloudflare
-    if _is_cloudflare "$domain_ip"; then
-        DNS_MODE="cloudflare"
-        log_sub "$DOMAIN → $domain_ip (Cloudflare proxy detected)"
-        return 0
+    # Check www
+    local www_ip
+    www_ip="$(_resolve_domain "www.${DOMAIN}")"
+    if [[ -n "$www_ip" ]]; then
+        WWW_RESOLVES=true
+        log_sub "www.${DOMAIN} → $www_ip"
     fi
 
-    # IP doesn't match and isn't Cloudflare
-    log_warn "$DOMAIN → $domain_ip (not this VPS: $PUBLIC_IP, not Cloudflare)"
-    return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------
-# Generate self-signed certificate (for Cloudflare Full mode)
-# ---------------------------------------------------------------------------
-_generate_self_signed() {
-    _SSL_DIR="/etc/ssl/az-wp"
-    mkdir -p "$_SSL_DIR"
-
-    log_sub "Generating self-signed SSL certificate for Cloudflare..."
-
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$_SSL_DIR/${DOMAIN}.key" \
-        -out "$_SSL_DIR/${DOMAIN}.crt" \
-        -subj "/CN=${DOMAIN}" \
-        -addext "subjectAltName=DNS:${DOMAIN},DNS:www.${DOMAIN}" \
-        2>/dev/null
-
-    chmod 600 "$_SSL_DIR/${DOMAIN}.key"
-    chmod 644 "$_SSL_DIR/${DOMAIN}.crt"
-
-    log_sub "Self-signed cert created (valid 10 years)"
-}
-
-# ---------------------------------------------------------------------------
-# Configure Nginx SSL block (for self-signed cert)
-# ---------------------------------------------------------------------------
-_configure_nginx_ssl() {
-    local ssl_dir="$_SSL_DIR"
-    local nginx_conf="/etc/nginx/sites-available/${DOMAIN}.conf"
-
-    if [[ ! -f "$nginx_conf" ]]; then
-        log_error "Nginx config not found: $nginx_conf"
-        return 1
-    fi
-
-    # Check if already has ssl listen directive
-    if grep -q "listen 443 ssl" "$nginx_conf"; then
-        log_sub "Nginx already configured for SSL."
-        return 0
-    fi
-
-    # Insert SSL directives after first "listen 80;" line
-    local ssl_block
-    ssl_block="    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    ssl_certificate ${ssl_dir}/${DOMAIN}.crt;
-    ssl_certificate_key ${ssl_dir}/${DOMAIN}.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-    add_header Strict-Transport-Security \"max-age=63072000\" always;"
-
-    # Use awk to insert after first "listen 80;"
-    awk -v block="$ssl_block" '
-        /listen 80;/ && !done { print; print block; done=1; next }
-        { print }
-    ' "$nginx_conf" > "${nginx_conf}.tmp" && mv "${nginx_conf}.tmp" "$nginx_conf"
-
-    log_sub "Nginx SSL configured with self-signed certificate."
-}
-
-# ---------------------------------------------------------------------------
-# Issue SSL certificate (main function)
+# Issue SSL certificate (Let's Encrypt — works behind Cloudflare too)
+#
+# How it works with Cloudflare proxy:
+# - Cloudflare forwards port 80 HTTP to origin
+# - Certbot HTTP-01 challenge uses port 80
+# - No need to disable proxy or use API tokens
+# - Same approach FlashPanel uses
 # ---------------------------------------------------------------------------
 issue_certificate() {
     local wp_admin_email
     wp_admin_email="$(state_get WP_ADMIN_EMAIL)" || wp_admin_email="${WP_ADMIN_EMAIL:-}"
 
     if [[ -z "$wp_admin_email" ]]; then
-        die "WP_ADMIN_EMAIL not set. Cannot issue SSL certificate."
+        die "WP_ADMIN_EMAIL not set."
     fi
 
-    # Detect DNS mode
     if ! check_dns; then
         log_warn "Domain does not resolve. SSL skipped."
-        log_info "Point your DNS to $PUBLIC_IP, then run: az-wp ssl issue"
+        log_info "Point your DNS to this VPS, then run: az-wp ssl issue"
         state_set "SSL_ISSUED" "false"
         return 0
     fi
 
-    case "$DNS_MODE" in
-        direct)
-            # DNS points directly to VPS → use Let's Encrypt
-            _issue_letsencrypt "$wp_admin_email"
-            ;;
-        cloudflare)
-            # DNS through Cloudflare proxy → use self-signed cert
-            _issue_cloudflare_ssl
-            ;;
-    esac
-}
-
-# ---------------------------------------------------------------------------
-# Let's Encrypt (direct DNS)
-# ---------------------------------------------------------------------------
-_issue_letsencrypt() {
-    local email="$1"
-
+    # Use certbot with nginx plugin and HTTP-01 challenge
     local certbot_args=(
         --nginx
         --non-interactive
         --agree-tos
-        --email "$email"
+        --preferred-challenges http
+        --email "$wp_admin_email"
         -d "$DOMAIN"
     )
 
@@ -198,66 +101,46 @@ _issue_letsencrypt() {
         certbot_args+=(-d "www.${DOMAIN}")
     fi
 
-    log_sub "Requesting Let's Encrypt certificate..."
+    log_sub "Requesting Let's Encrypt certificate (HTTP-01 challenge)..."
 
     if certbot "${certbot_args[@]}" 2>&1; then
         state_set "SSL_ISSUED" "true"
         state_set "SSL_TYPE" "letsencrypt"
 
-        # Ensure HSTS
+        # Add HSTS if missing
         local nginx_conf="/etc/nginx/sites-available/${DOMAIN}.conf"
         if [[ -f "$nginx_conf" ]] && ! grep -q "Strict-Transport-Security" "$nginx_conf"; then
-            sed -i '/ssl_protocols\|ssl_dhparam/a \    add_header Strict-Transport-Security "max-age=63072000" always;' "$nginx_conf"
+            sed -i '/server_tokens off;/a \    add_header Strict-Transport-Security "max-age=63072000" always;' "$nginx_conf"
         fi
 
         service_reload nginx
         log_sub "Let's Encrypt SSL active for $DOMAIN"
+        log_sub "Auto-renew enabled. Compatible with Cloudflare Full (Strict)."
     else
-        # Certbot failed — fallback to self-signed
-        log_warn "Let's Encrypt failed. Falling back to self-signed certificate."
-        _issue_cloudflare_ssl
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Self-signed SSL (Cloudflare proxy or fallback)
-# ---------------------------------------------------------------------------
-_issue_cloudflare_ssl() {
-    _generate_self_signed
-    _configure_nginx_ssl
-
-    if nginx -t 2>/dev/null; then
-        service_reload nginx
-        state_set "SSL_ISSUED" "true"
-        state_set "SSL_TYPE" "self-signed"
-        log_sub "SSL active (self-signed). Set Cloudflare SSL mode to Full."
-    else
-        log_error "Nginx config test failed after SSL setup."
         state_set "SSL_ISSUED" "false"
+        log_warn "SSL certificate failed. You can retry: az-wp ssl issue"
+        return 0
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Setup SSL auto-renewal (Let's Encrypt only)
+# Setup SSL auto-renewal
 # ---------------------------------------------------------------------------
 setup_ssl_renewal() {
     log_sub "Configuring SSL auto-renewal..."
 
-    # Verify certbot timer is active
     if ! systemctl is-active --quiet certbot.timer 2>/dev/null; then
         systemctl enable --now certbot.timer 2>/dev/null \
             || log_warn "Could not enable certbot.timer."
     fi
     log_sub "certbot.timer is active."
 
-    # Add deploy hook for Nginx reload
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-
     cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'HOOK'
 #!/bin/bash
 systemctl reload nginx
 HOOK
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
-    log_sub "SSL auto-renewal configured with Nginx reload hook."
+    log_sub "SSL auto-renewal configured."
 }
