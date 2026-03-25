@@ -4,8 +4,12 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Ensure stdin is from terminal (needed when piped via curl | bash)
 # ---------------------------------------------------------------------------
-if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
-    exec </dev/tty
+if [[ ! -t 0 ]]; then
+    if [[ -c /dev/tty ]]; then
+        exec </dev/tty
+    fi
+    # If no tty available (pure SSH pipe), continue without — prompts
+    # will use state file values from previous run
 fi
 
 # ---------------------------------------------------------------------------

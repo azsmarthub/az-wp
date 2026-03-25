@@ -146,6 +146,10 @@ require_root() {
 confirm() {
     local prompt="${1:-Continue?}"
     local answer
+    # Auto-accept if no terminal (non-interactive / SSH pipe)
+    if [[ ! -t 0 ]]; then
+        return 0
+    fi
     printf "${BOLD}%s [y/N]: ${NC}" "$prompt"
     read -r answer
     [[ "$answer" =~ ^[Yy]$ ]]
