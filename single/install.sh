@@ -301,6 +301,9 @@ step_redis() {
     configure_redis
     service_restart redis-server
     test_redis || log_warn "Redis test failed — check config"
+    # Restart PHP-FPM to pick up new redis group membership
+    # (usermod -aG redis was run in configure_redis, but FPM started before that)
+    service_restart "php${PHP_VERSION}-fpm"
 }
 
 # ---------------------------------------------------------------------------
