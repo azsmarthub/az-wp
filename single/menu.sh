@@ -176,21 +176,27 @@ menu_wordpress() {
         debug)
             local current; current="$(wp_run config get WP_DEBUG --raw 2>/dev/null | tr -d '[:space:]')"
             local debug_arg="${2:-}"
-            # Show current status
-            if [[ "$current" == "1" || "$current" == "true" ]]; then
-                printf "  Debug mode: ${YELLOW}ON${NC}\n"
-            else
-                printf "  Debug mode: ${GREEN}OFF${NC}\n"
-            fi
-            # Toggle or set explicitly
-            if [[ "$debug_arg" == "on" ]] || { [[ -z "$debug_arg" ]] && [[ "$current" != "1" && "$current" != "true" ]]; }; then
+            local is_on=false
+            [[ "$current" == "1" || "$current" == "true" ]] && is_on=true
+
+            if [[ "$debug_arg" == "on" ]]; then
                 wp_run config set WP_DEBUG true --raw > /dev/null
                 wp_run config set WP_DEBUG_LOG true --raw > /dev/null
                 log_success "Debug mode → ON. Logs: $WEB_ROOT/wp-content/debug.log"
-            elif [[ "$debug_arg" == "off" ]] || { [[ -z "$debug_arg" ]] && [[ "$current" == "1" || "$current" == "true" ]]; }; then
+            elif [[ "$debug_arg" == "off" ]]; then
                 wp_run config set WP_DEBUG false --raw > /dev/null
                 wp_run config set WP_DEBUG_LOG false --raw > /dev/null
                 log_success "Debug mode → OFF."
+            else
+                # Show status only, ask to toggle
+                if $is_on; then
+                    printf "  Debug mode: ${YELLOW}ON${NC}\n"
+                    printf "  Log: %s/wp-content/debug.log\n" "$WEB_ROOT"
+                    printf "\n  Turn off? ${DIM}az-wp wp debug off${NC}\n"
+                else
+                    printf "  Debug mode: ${GREEN}OFF${NC}\n"
+                    printf "\n  Turn on? ${DIM}az-wp wp debug on${NC}\n"
+                fi
             fi
             ;;
         maintenance)
