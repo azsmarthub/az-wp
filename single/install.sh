@@ -90,15 +90,8 @@ prompt_config() {
     done
     DOMAIN="$input_domain"
 
-    # --- PHP version ---
-    printf "${BOLD}PHP version${NC} [8.1/8.2/8.3/8.4/8.5] (default 8.4): "
-    read -r PHP_VERSION
-    PHP_VERSION="${PHP_VERSION:-8.4}"
-    case "$PHP_VERSION" in
-        8.1|8.2|8.3|8.4|8.5) ;;
-        *) log_warn "Invalid PHP version '$PHP_VERSION', defaulting to 8.4."
-           PHP_VERSION="8.4" ;;
-    esac
+    # --- PHP version (latest by default) ---
+    PHP_VERSION="8.5"
 
     # --- WP admin user ---
     printf "${BOLD}WP admin username${NC} (default: admin): "
@@ -246,22 +239,15 @@ step_create_user() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 3: Nginx
+# Step 3: Nginx + FastCGI Cache (cache zone must exist before site config)
 # ---------------------------------------------------------------------------
 step_nginx() {
     install_nginx
     configure_nginx
+    configure_fastcgi_cache
     configure_site
     test_nginx || die "Nginx config test failed"
     service_restart nginx
-}
-
-# ---------------------------------------------------------------------------
-# Step 4: FastCGI Cache
-# ---------------------------------------------------------------------------
-step_fastcgi_cache() {
-    configure_fastcgi_cache
-    service_reload nginx
 }
 
 # ---------------------------------------------------------------------------
@@ -396,16 +382,15 @@ main() {
     start_time="$(date +%s)"
 
     printf "\n"
-    run_step  1 10 "System preparation"        step_system_prep
-    run_step  2 10 "Creating site user"         step_create_user
-    run_step  3 10 "Installing Nginx"           step_nginx
-    run_step  4 10 "Configuring FastCGI Cache"  step_fastcgi_cache
-    run_step  5 10 "Installing PHP ${PHP_VERSION}" step_php
-    run_step  6 10 "Installing MariaDB"         step_mariadb
-    run_step  7 10 "Installing Redis"           step_redis
-    run_step  8 10 "Installing WordPress"       step_wordpress
-    run_step  9 10 "Issuing SSL certificate"    step_ssl
-    run_step 10 10 "Security hardening"         step_security
+    run_step 1 9 "System preparation"           step_system_prep
+    run_step 2 9 "Creating site user"            step_create_user
+    run_step 3 9 "Installing Nginx + Cache"      step_nginx
+    run_step 4 9 "Installing PHP ${PHP_VERSION}" step_php
+    run_step 5 9 "Installing MariaDB"            step_mariadb
+    run_step 6 9 "Installing Redis"              step_redis
+    run_step 7 9 "Installing WordPress"          step_wordpress
+    run_step 8 9 "Issuing SSL certificate"       step_ssl
+    run_step 9 9 "Security hardening"            step_security
 
     install_cli_menu
     print_summary "$start_time"
