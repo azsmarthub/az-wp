@@ -108,4 +108,5 @@ printf "\n"
 printf "${BOLD}Starting installer...${NC}\n"
 printf "\n"
 
-exec "$AZ_INSTALL_DIR/single/install.sh"
+# Use /dev/tty to ensure interactive prompts work even when piped via curl
+exec "$AZ_INSTALL_DIR/single/install.sh" </dev/tty
