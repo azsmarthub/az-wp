@@ -1065,27 +1065,27 @@ FPMPOOL
             # Use ^~ to override regex static file matching
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
-    # phpMyAdmin — managed by az-wp (token-based access)
+    # phpMyAdmin — managed by az-wp (token-based access + cookie session)
     location ^~ ${pma_path}/ {
         alias /usr/share/phpmyadmin/;
         index index.php;
 
-        # PHP files require token (main entry points)
+        # Set cookie when token is in URL (first visit)
+        if (\$arg_token = "${pma_token}") {
+            add_header Set-Cookie "pma_auth=${pma_token}; Path=${pma_path}/; HttpOnly; Secure; SameSite=Lax" always;
+        }
+
         location ~ \.php\$ {
-            # Check token in query string or cookie
+            # Allow if: token in URL OR valid cookie
             set \$pma_allow 0;
             if (\$arg_token = "${pma_token}") { set \$pma_allow 1; }
-            if (\$cookie_pma_token = "${pma_token}") { set \$pma_allow 1; }
-            if (\$http_referer ~ "${pma_path}/") { set \$pma_allow 1; }
+            if (\$cookie_pma_auth = "${pma_token}") { set \$pma_allow 1; }
             if (\$pma_allow = 0) { return 403; }
 
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
             fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-pma.sock;
         }
-
-        # Static files (js/css/images) — allow if referer is from PMA
-        # No token needed for assets, they're not sensitive
     }
     # end phpMyAdmin
 PMACONF
