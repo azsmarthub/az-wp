@@ -96,17 +96,17 @@ configure_wp_extras() {
     # Core constants
     wp_run config set DISABLE_WP_CRON true --raw
     wp_run config set DISALLOW_FILE_EDIT true --raw
-    wp_run config set WP_AUTO_UPDATE_CORE "'minor'"
+    wp_run config set WP_AUTO_UPDATE_CORE "minor"
     wp_run config set WP_DEBUG false --raw
     wp_run config set WP_DEBUG_LOG false --raw
     wp_run config set WP_DEBUG_DISPLAY false --raw
 
     # Redis Object Cache constants
     log_sub "Configuring Redis object cache constants..."
-    wp_run config set WP_REDIS_SCHEME "'unix'"
-    wp_run config set WP_REDIS_PATH "'${REDIS_SOCK}'"
+    wp_run config set WP_REDIS_SCHEME "unix"
+    wp_run config set WP_REDIS_PATH "${REDIS_SOCK}"
     wp_run config set WP_REDIS_DATABASE 0 --raw
-    wp_run config set WP_CACHE_KEY_SALT "'${DOMAIN}_'"
+    wp_run config set WP_CACHE_KEY_SALT "${DOMAIN}_"
 
     log_sub "WordPress constants configured."
 }
