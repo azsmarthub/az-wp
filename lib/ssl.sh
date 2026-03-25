@@ -79,7 +79,11 @@ issue_certificate() {
 
     # Check DNS first
     if ! check_dns; then
-        log_warn "DNS not pointing to this VPS. Skipping SSL."
+        log_warn "DNS does not point directly to this VPS."
+        log_warn "This is normal if using Cloudflare proxy (orange cloud)."
+        log_warn "For SSL: either disable Cloudflare proxy temporarily, or"
+        log_warn "use Cloudflare's own SSL (Full Strict) without Let's Encrypt."
+        log_info "Skipping SSL for now. Run 'az-wp ssl issue' later after DNS is ready."
         state_set "SSL_ISSUED" "false"
         return 0
     fi

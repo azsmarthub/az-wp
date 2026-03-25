@@ -3,12 +3,13 @@ bantime = 3600
 findtime = 600
 maxretry = 5
 backend = systemd
+ignoreip = 127.0.0.1/8 ::1
 
 [sshd]
 enabled = true
 port = ${SSH_PORT}
-maxretry = 3
-bantime = 7200
+maxretry = 5
+bantime = 3600
 
 [nginx-http-auth]
 enabled = true

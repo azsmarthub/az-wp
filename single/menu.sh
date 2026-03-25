@@ -2,9 +2,16 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Resolve paths
+# Resolve paths (follow symlink to real location)
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_SELF="${BASH_SOURCE[0]}"
+# Resolve symlink chain to get the real script path
+while [[ -L "$_SELF" ]]; do
+    _DIR="$(cd "$(dirname "$_SELF")" && pwd)"
+    _SELF="$(readlink "$_SELF")"
+    [[ "$_SELF" != /* ]] && _SELF="$_DIR/$_SELF"
+done
+SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
 AZ_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 export AZ_DIR
 
