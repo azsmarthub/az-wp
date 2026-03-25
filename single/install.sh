@@ -194,7 +194,7 @@ step_system_prep() {
 
     # Essential packages
     log_sub "Installing base packages (curl, git, htop, etc.)..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
         curl wget gnupg software-properties-common unzip git bc \
         htop ncdu logrotate apt-transport-https ca-certificates lsb-release \
         2>&1 | grep -E "^(Setting up|[0-9]+ newly)" | tail -3 || true

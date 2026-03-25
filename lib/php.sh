@@ -11,21 +11,20 @@ install_php() {
     add-apt-repository ppa:ondrej/php -y 2>&1 | grep -E "^(Adding|More info)" | head -2
     apt-get update -qq 2>/dev/null
 
-    log_sub "Installing PHP ${PHP_VERSION} + 16 extensions (this may take 1-2 minutes)..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    log_sub "Installing PHP ${PHP_VERSION} + extensions (this may take 1-2 minutes)..."
+    # Note: fileinfo, exif, iconv, opcache are built into php-common
+    # mysqli is packaged as php-mysql
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y \
         "php${PHP_VERSION}-fpm" \
         "php${PHP_VERSION}-cli" \
         "php${PHP_VERSION}-curl" \
         "php${PHP_VERSION}-xml" \
-        "php${PHP_VERSION}-fileinfo" \
         "php${PHP_VERSION}-gd" \
         "php${PHP_VERSION}-mbstring" \
-        "php${PHP_VERSION}-mysqli" \
+        "php${PHP_VERSION}-mysql" \
         "php${PHP_VERSION}-zip" \
         "php${PHP_VERSION}-intl" \
         "php${PHP_VERSION}-imagick" \
-        "php${PHP_VERSION}-exif" \
-        "php${PHP_VERSION}-iconv" \
         "php${PHP_VERSION}-soap" \
         "php${PHP_VERSION}-bcmath" \
         "php${PHP_VERSION}-redis" \

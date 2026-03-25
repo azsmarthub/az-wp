@@ -9,7 +9,7 @@ _AZ_SSL_LOADED=1
 install_certbot() {
     log_sub "Installing Certbot..."
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx > /dev/null 2>&1
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx > /dev/null 2>&1
 
     log_sub "Certbot installed."
 }

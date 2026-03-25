@@ -21,7 +21,7 @@ install_nginx() {
 
     log_sub "Installing Nginx..."
     apt-get update -qq 2>/dev/null
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nginx > /dev/null 2>&1
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y nginx > /dev/null 2>&1
 
     systemctl enable nginx 2>/dev/null
 
