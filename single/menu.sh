@@ -786,26 +786,24 @@ menu_advanced() {
                         || printf "  (not accessible)\n"
                     ;;
                 opcache)
-                    # Query OPcache via FPM (CLI has opcache disabled)
-                    local opcache_tmp="$WEB_ROOT/_az_opcache_check.php"
-                    cat > "$opcache_tmp" <<'OPCPHP'
-<?php
-$s = opcache_get_status(false);
-if (!$s) { echo "OPcache: DISABLED\n"; exit; }
-$m = $s['memory_usage'];
-$j = $s['jit'] ?? [];
-printf("OPcache:     ENABLED\n");
-printf("Memory:      %s MB used / %s MB free\n", round($m['used_memory']/1048576,1), round($m['free_memory']/1048576,1));
-printf("Scripts:     %d cached\n", $s['opcache_statistics']['num_cached_scripts'] ?? 0);
-printf("Hit rate:    %.1f%%\n", $s['opcache_statistics']['opcache_hit_rate'] ?? 0);
-if (!empty($j['enabled'])) { printf("JIT:         ENABLED (%s MB buffer)\n", round($j['buffer_size']/1048576)); }
-else { printf("JIT:         DISABLED\n"); }
-OPCPHP
-                    chown "$SITE_USER:$SITE_USER" "$opcache_tmp"
-                    printf "\n"
-                    curl -sf --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/_az_opcache_check.php" 2>/dev/null \
-                        || printf "  Could not query OPcache via FPM.\n"
-                    rm -f "$opcache_tmp"
+                    _header "OPcache Configuration"
+                    local opcache_ini="/etc/php/${PHP_VERSION}/fpm/conf.d/10-opcache-az.ini"
+                    if [[ -f "$opcache_ini" ]]; then
+                        local oc_enabled oc_mem oc_jit oc_files
+                        oc_enabled="$(grep 'opcache.enable ' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
+                        oc_mem="$(grep 'opcache.memory_consumption' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
+                        oc_jit="$(grep 'opcache.jit_buffer_size' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
+                        oc_files="$(grep 'opcache.max_accelerated_files' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
+                        printf "  Status:       %s\n" "$([[ "$oc_enabled" == "1" ]] && echo "${GREEN}ENABLED${NC}" || echo "${RED}DISABLED${NC}")"
+                        printf "  Memory:       %s MB\n" "${oc_mem:-0}"
+                        printf "  Max files:    %s\n" "${oc_files:-0}"
+                        printf "  JIT buffer:   %s\n" "${oc_jit:-0 (disabled)}"
+                        printf "  Revalidate:   %ss\n" "$(grep 'revalidate_freq' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
+                    else
+                        printf "  OPcache config not found at %s\n" "$opcache_ini"
+                    fi
+                    printf "\n  ${DIM}Note: OPcache runs inside PHP-FPM only. CLI has it disabled.${NC}\n"
+                    printf "  ${DIM}Reset OPcache: az-wp advanced perf reload-fpm${NC}\n"
                     ;;
                 reload-fpm)
                     service_restart "php${PHP_VERSION}-fpm"
