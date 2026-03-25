@@ -1042,31 +1042,39 @@ menu_phpmyadmin() {
             local htpasswd_file="/etc/nginx/.pma_htpasswd"
             printf '%s:%s\n' "$pma_user" "$(openssl passwd -apr1 "$pma_pass")" > "$htpasswd_file"
 
-            # Add nginx location block
-            local pma_block
-            pma_block="$(cat <<BLOCK
+            # Remove old block if exists
+            sed -i '/# phpMyAdmin.*managed by az-wp/,/# end phpMyAdmin/d' "$nginx_conf" 2>/dev/null || true
 
+            # Create pma nginx snippet
+            local pma_snippet="/etc/nginx/az-wp-pma.conf"
+            cat > "$pma_snippet" <<PMACONF
     # phpMyAdmin — managed by az-wp
     location ${pma_path} {
         alias /usr/share/phpmyadmin;
         auth_basic "Restricted";
         auth_basic_user_file ${htpasswd_file};
-
-        location ~ \\.php\$ {
+        location ~ \.php\$ {
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
-            fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
+            fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
         }
     }
     # end phpMyAdmin
-BLOCK
-)"
+PMACONF
 
-            # Remove old block if exists, then inject before last }
-            sed -i '/# phpMyAdmin.*managed by az-wp/,/# end phpMyAdmin/d' "$nginx_conf" 2>/dev/null || true
-            sed -i "\$i\\${pma_block}" "$nginx_conf"
+            # Inject include before closing } of server block
+            if ! grep -q "az-wp-pma.conf" "$nginx_conf"; then
+                sed -i '/^}$/i \    include /etc/nginx/az-wp-pma.conf;' "$nginx_conf"
+            fi
 
-            service_reload nginx
+            if nginx -t 2>/dev/null; then
+                service_reload nginx
+            else
+                log_error "Nginx config test failed."
+                rm -f "$pma_snippet"
+                sed -i '/az-wp-pma.conf/d' "$nginx_conf"
+                return 1
+            fi
 
             # Save to state
             state_set "PMA_PATH" "$pma_path"
@@ -1080,7 +1088,8 @@ BLOCK
             ;;
         disable)
             confirm "Disable phpMyAdmin?" || return 0
-            sed -i '/# phpMyAdmin.*managed by az-wp/,/# end phpMyAdmin/d' "$nginx_conf" 2>/dev/null || true
+            rm -f /etc/nginx/az-wp-pma.conf
+            sed -i '/az-wp-pma.conf/d' "$nginx_conf" 2>/dev/null || true
             service_reload nginx
             log_success "phpMyAdmin disabled."
             ;;
