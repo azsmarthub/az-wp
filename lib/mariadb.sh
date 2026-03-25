@@ -9,7 +9,7 @@ _AZ_MARIADB_LOADED=1
 install_mariadb() {
     log_sub "Adding MariaDB 10.11 official repo..."
     curl -fsSL https://mariadb.org/mariadb_release_signing_key.pgp \
-        | gpg --dearmor -o /usr/share/keyrings/mariadb-keyring.gpg 2>/dev/null
+        | gpg --dearmor --yes -o /usr/share/keyrings/mariadb-keyring.gpg 2>/dev/null
 
     local codename
     codename="$(lsb_release -cs)"

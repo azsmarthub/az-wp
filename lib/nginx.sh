@@ -9,7 +9,7 @@ _AZ_NGINX_LOADED=1
 install_nginx() {
     log_sub "Adding nginx.org official repo..."
     curl -fsSL https://nginx.org/keys/nginx_signing.key \
-        | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null
+        | gpg --dearmor --yes -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null
 
     local codename
     codename="$(lsb_release -cs)"
