@@ -175,14 +175,22 @@ menu_wordpress() {
             ;;
         debug)
             local current; current="$(wp_run config get WP_DEBUG --raw 2>/dev/null | tr -d '[:space:]')"
+            local debug_arg="${2:-}"
+            # Show current status
             if [[ "$current" == "1" || "$current" == "true" ]]; then
-                wp_run config set WP_DEBUG false --raw
-                wp_run config set WP_DEBUG_LOG false --raw
-                log_success "Debug mode OFF."
+                printf "  Debug mode: ${YELLOW}ON${NC}\n"
             else
-                wp_run config set WP_DEBUG true --raw
-                wp_run config set WP_DEBUG_LOG true --raw
-                log_success "Debug mode ON. Logs: $WEB_ROOT/wp-content/debug.log"
+                printf "  Debug mode: ${GREEN}OFF${NC}\n"
+            fi
+            # Toggle or set explicitly
+            if [[ "$debug_arg" == "on" ]] || { [[ -z "$debug_arg" ]] && [[ "$current" != "1" && "$current" != "true" ]]; }; then
+                wp_run config set WP_DEBUG true --raw > /dev/null
+                wp_run config set WP_DEBUG_LOG true --raw > /dev/null
+                log_success "Debug mode → ON. Logs: $WEB_ROOT/wp-content/debug.log"
+            elif [[ "$debug_arg" == "off" ]] || { [[ -z "$debug_arg" ]] && [[ "$current" == "1" || "$current" == "true" ]]; }; then
+                wp_run config set WP_DEBUG false --raw > /dev/null
+                wp_run config set WP_DEBUG_LOG false --raw > /dev/null
+                log_success "Debug mode → OFF."
             fi
             ;;
         maintenance)
@@ -229,15 +237,14 @@ menu_database() {
     if [[ -z "$sub" ]]; then
         _header "Database Tools"
         printf "  1) phpMyAdmin (open login URL)\n"
-        printf "  2) Backup database\n"
-        printf "  3) Restore database\n"
-        printf "  4) Optimize tables\n"
-        printf "  5) MySQL CLI\n"
+        printf "  2) Database info (credentials, paths)\n"
+        printf "  3) Optimize tables\n"
+        printf "  4) MySQL CLI\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
-            1) sub="pma" ;; 2) sub="backup" ;; 3) sub="restore" ;;
-            4) sub="optimize" ;; 5) sub="cli" ;; *) return 0 ;;
+            1) sub="pma" ;; 2) sub="info" ;;
+            3) sub="optimize" ;; 4) sub="cli" ;; *) return 0 ;;
         esac
     fi
 
@@ -250,29 +257,6 @@ menu_database() {
                 printf "\n  ${BOLD}phpMyAdmin:${NC} https://%s%s/\n\n" "$DOMAIN" "$pma_path"
             fi
             ;;
-        backup)
-            log_info "Backing up database..."
-            local ts; ts="$(date +%Y%m%d-%H%M%S)"
-            local dir="/home/${SITE_USER}/backups"; mkdir -p "$dir"
-            local file="$dir/${DOMAIN}-db-${ts}.sql.gz"
-            ionice -c3 nice -n 19 mysqldump --single-transaction --quick --lock-tables=false \
-                --routines --triggers -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null \
-                | gzip > "$file"
-            local size; size="$(stat -c%s "$file" 2>/dev/null || echo 0)"
-            log_success "DB backup: $file ($(format_size "$size"))"
-            ;;
-        restore)
-            local file="${2:-}"
-            [[ -z "$file" ]] && { read -rp "  File path (.sql or .sql.gz): " file; }
-            [[ ! -f "$file" ]] && { log_error "File not found: $file"; return 1; }
-            confirm "This will OVERWRITE the current database. Continue?" || return 0
-            if [[ "$file" == *.gz ]]; then
-                gunzip -c "$file" | mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
-            else
-                mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" < "$file"
-            fi
-            log_success "Database restored from $file"
-            ;;
         optimize)
             log_info "Optimizing tables..."
             mysqlcheck --optimize -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null
@@ -280,6 +264,15 @@ menu_database() {
             ;;
         cli)
             mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
+            ;;
+        info)
+            _header "Database Info"
+            printf "  DB Name:  %s\n" "$DB_NAME"
+            printf "  DB User:  %s\n" "$DB_USER"
+            printf "  DB Pass:  %s\n" "$DB_PASS"
+            printf "  Backups:  /home/%s/backups/\n" "$SITE_USER"
+            local pma_path; pma_path="$(state_get PMA_PATH 2>/dev/null)" || pma_path=""
+            [[ -n "$pma_path" ]] && printf "  PMA URL:  https://%s%s/\n" "$DOMAIN" "$pma_path"
             ;;
         *) log_warn "Unknown: $sub" ;;
     esac
@@ -425,56 +418,58 @@ menu_cron() {
     local sub="${1:-}"
     if [[ -z "$sub" ]]; then
         _header "Cron Management"
-        # Show existing crons
-        printf "\n  ${BOLD}Active cron jobs:${NC}\n"
-        local found=0
-        for f in /etc/cron.d/az-wp-*; do
-            [[ ! -f "$f" ]] && continue
-            found=1
-            local name; name="$(basename "$f")"
-            local desc; desc="$(head -1 "$f" | sed 's/^# az-wp: //' | sed 's/^# //')"
-            local sched; sched="$(grep -v '^#' "$f" | head -1 | awk '{print $1,$2,$3,$4,$5}')"
-            printf "    %-25s %-15s %s\n" "$name" "$sched" "$desc"
-        done
-        [[ "$found" -eq 0 ]] && printf "    (none)\n"
-
-        printf "\n  1) Add cron job\n"
-        printf "  2) Remove cron job\n"
-        printf "  3) Show all (cat files)\n"
+        _cron_show_all
+        printf "\n  1) Add cron job (paste full cron line)\n"
+        printf "  2) Install AffiliateCMS preset crons\n"
+        printf "  3) Remove cron job\n"
+        printf "  4) Remove all custom crons\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
-            1) sub="add" ;; 2) sub="remove" ;; 3) sub="show" ;; *) return 0 ;;
+            1) sub="add" ;; 2) sub="preset" ;; 3) sub="remove" ;;
+            4) sub="remove-all" ;; *) return 0 ;;
         esac
     fi
 
     case "$sub" in
-        list)
-            _header "Cron Jobs"
-            for f in /etc/cron.d/az-wp-*; do
-                [[ ! -f "$f" ]] && continue
-                local name; name="$(basename "$f")"
-                printf "\n  ${BOLD}%s${NC}\n" "$name"
-                cat "$f"
-            done
-            ;;
+        list) _cron_show_all ;;
+
         add)
-            printf "\n  Create new cron job\n"
-            local cron_name cron_sched cron_cmd
-            read -rp "  Name (e.g. scrape-products): " cron_name
-            [[ -z "$cron_name" ]] && { log_warn "Name required."; return; }
-            read -rp "  Schedule (cron format, e.g. */5 * * * *): " cron_sched
-            [[ -z "$cron_sched" ]] && { log_warn "Schedule required."; return; }
-            read -rp "  Command: " cron_cmd
-            [[ -z "$cron_cmd" ]] && { log_warn "Command required."; return; }
-            read -rp "  Description (optional): " cron_desc
+            printf "\n  Paste a full cron line (schedule + command):\n"
+            printf "  ${DIM}Example: */5 * * * * curl -s \"https://example.com/wp-json/...\"${NC}\n\n"
+            local cron_line
+            read -rp "  > " cron_line
+            [[ -z "$cron_line" ]] && { log_warn "Empty input."; return; }
+
+            # Auto-generate name from URL path or command
+            local cron_name
+            cron_name="$(printf '%s' "$cron_line" | grep -oP '/v1/[^?]+' | sed 's|/v1/||;s|/|-|g' | head -1)"
+            [[ -z "$cron_name" ]] && cron_name="custom-$(openssl rand -hex 3)"
+
+            # Extract schedule (first 5 fields) and command (rest)
+            local sched cmd
+            sched="$(printf '%s' "$cron_line" | awk '{print $1,$2,$3,$4,$5}')"
+            cmd="$(printf '%s' "$cron_line" | awk '{for(i=6;i<=NF;i++) printf "%s ", $i; print ""}')"
+
+            # Auto-add --resolve and --max-time if curl and not present
+            if [[ "$cmd" == *curl* && "$cmd" != *--resolve* ]]; then
+                cmd="$(printf '%s' "$cmd" | sed "s|curl |curl -sk --resolve ${DOMAIN}:443:127.0.0.1 --max-time 30 |")"
+            fi
+
+            # Strip trailing redirect if already present
+            cmd="$(printf '%s' "$cmd" | sed 's|>[/dev/null ]*2>&1||;s|[[:space:]]*$//')"
 
             local cron_file="/etc/cron.d/az-wp-${cron_name}"
-            printf '# az-wp: %s\n%s root %s > /dev/null 2>&1\n' \
-                "${cron_desc:-$cron_name}" "$cron_sched" "$cron_cmd" > "$cron_file"
+            printf '# az-wp cron: %s\n%s root %s > /dev/null 2>&1\n' \
+                "$cron_name" "$sched" "$cmd" > "$cron_file"
             chmod 644 "$cron_file"
-            log_success "Created $cron_file"
+            log_success "Created: $cron_file"
             ;;
+
+        preset)
+            _cron_install_preset
+            ;;
+
         remove)
             local name="${2:-}"
             if [[ -z "$name" ]]; then
@@ -482,10 +477,9 @@ menu_cron() {
                 for f in /etc/cron.d/az-wp-*; do
                     [[ -f "$f" ]] && printf "    %s\n" "$(basename "$f")"
                 done
-                read -rp "  Name to remove (e.g. az-wp-scrape): " name
+                read -rp "  Name to remove: " name
             fi
             [[ -z "$name" ]] && return
-            # Add prefix if not present
             [[ "$name" != az-wp-* ]] && name="az-wp-${name}"
             local target="/etc/cron.d/${name}"
             if [[ -f "$target" ]]; then
@@ -496,15 +490,98 @@ menu_cron() {
                 log_warn "Not found: $target"
             fi
             ;;
-        show)
+
+        remove-all)
+            confirm "Remove ALL custom az-wp cron jobs (except wp-cron)?" || return 0
+            local count=0
             for f in /etc/cron.d/az-wp-*; do
                 [[ ! -f "$f" ]] && continue
-                printf "\n  ${BOLD}=== %s ===${NC}\n" "$(basename "$f")"
-                cat "$f"
+                [[ "$(basename "$f")" == "az-wp-cron" ]] && continue
+                [[ "$(basename "$f")" == "az-wp-backup" ]] && continue
+                rm -f "$f"
+                count=$((count + 1))
             done
+            log_success "Removed $count cron jobs."
             ;;
+
         *) log_warn "Unknown: $sub" ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# Cron helpers
+# ---------------------------------------------------------------------------
+_cron_show_all() {
+    printf "\n  ${BOLD}Active cron jobs:${NC}\n"
+    local found=0
+    for f in /etc/cron.d/az-wp-*; do
+        [[ ! -f "$f" ]] && continue
+        found=1
+        local name; name="$(basename "$f")"
+        local desc; desc="$(head -1 "$f" | sed 's/^# az-wp[: ]*//')"
+        local sched; sched="$(grep -v '^#' "$f" | grep -v '^$' | head -1 | awk '{print $1,$2,$3,$4,$5}')"
+        printf "    ${GREEN}%-30s${NC} %-12s %s\n" "$name" "$sched" "$desc"
+    done
+    [[ "$found" -eq 0 ]] && printf "    (none)\n"
+}
+
+_cron_install_preset() {
+    _header "AffiliateCMS Cron Preset"
+
+    # Need API token from WP
+    local api_token
+    api_token="$(wp_run option get acms_api_token 2>/dev/null | tr -d '[:space:]')" || api_token=""
+
+    if [[ -z "$api_token" ]]; then
+        printf "  AffiliateCMS API token not found in WordPress.\n"
+        read -rp "  Enter API token (or press ENTER to skip): " api_token
+        [[ -z "$api_token" ]] && { log_warn "Skipped."; return; }
+    fi
+
+    local base="curl -sk --resolve ${DOMAIN}:443:127.0.0.1 --max-time 30"
+    local url="https://${DOMAIN}"
+
+    # Define all preset crons: name|schedule|endpoint|description
+    local presets=(
+        "scrape|*/5 * * * *|/wp-json/acms/v1/automation/scrape|Scrape dispatcher"
+        "scrape-monitor|*/5 * * * *|/wp-json/acms/v1/cron/scrape-monitor|Scrape monitor"
+        "queue-processor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-processor|Category queue processor"
+        "queue-monitor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|Category queue monitor"
+        "product-ai|*/10 * * * *|/wp-json/acms/v1/cron/product-ai|Product AI generation"
+        "post-ai|*/10 * * * *|/wp-json/acms/v1/cron/post-ai|Post AI generation"
+        "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/process-category-ai|Category AI"
+        "brand-ai|*/10 * * * *|/wp-json/acms/v1/cron/brand-ai|Brand AI generation"
+        "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|Brand category AI"
+        "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|Quick price update"
+        "retry-stuck|*/10 * * * *|/wp-json/acms-cat/v1/cron/retry-stuck|Retry stuck jobs"
+        "bulk-update|* * * * *|/wp-json/acms-cat/v1/cron/bulk-update-worker|Bulk update worker"
+        "cache-preload|0 3 * * 0|/wp-json/acms/v1/cache/preload|Weekly cache preload"
+        "cache-refresh|0 */4 * * *|/wp-json/acms/v1/cache/smart-refresh|Smart cache refresh"
+        "cache-resume|*/30 * * * *|/wp-json/acms/v1/cache/resume-queue|Resume cache queue"
+    )
+
+    printf "  Will create %d cron jobs for AffiliateCMS:\n\n" "${#presets[@]}"
+    local p
+    for p in "${presets[@]}"; do
+        IFS='|' read -r name sched endpoint desc <<< "$p"
+        printf "    %-12s %-25s %s\n" "$sched" "$desc" "$endpoint"
+    done
+
+    printf "\n"
+    confirm "Install all ${#presets[@]} cron jobs?" || return 0
+
+    local count=0
+    for p in "${presets[@]}"; do
+        IFS='|' read -r name sched endpoint desc <<< "$p"
+        local cron_file="/etc/cron.d/az-wp-${name}"
+        printf '# az-wp cron: %s\n%s root %s "%s%s?token=%s" > /dev/null 2>&1\n' \
+            "$desc" "$sched" "$base" "$url" "$endpoint" "$api_token" > "$cron_file"
+        chmod 644 "$cron_file"
+        count=$((count + 1))
+    done
+
+    log_success "Installed $count AffiliateCMS cron jobs."
+    printf "  ${DIM}View: az-wp cron list${NC}\n"
 }
 
 # ===========================================================================
