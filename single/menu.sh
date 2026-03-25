@@ -1032,10 +1032,8 @@ menu_phpmyadmin() {
                 log_success "phpMyAdmin installed."
             fi
 
-            # Generate random URL path (security through obscurity + token)
+            # Generate random URL path (16 hex chars = unguessable)
             local pma_path="/pma-$(openssl rand -hex 8)"
-            local pma_token
-            pma_token="$(openssl rand -hex 32)"
 
             # Create dedicated FPM pool for phpMyAdmin (runs as www-data)
             local pma_pool="/etc/php/${PHP_VERSION}/fpm/pool.d/phpmyadmin.conf"
@@ -1061,59 +1059,11 @@ FPMPOOL
                 log_sub "phpMyAdmin FPM pool created."
             fi
 
-            # Create nginx snippet — token-based access
-            # Use ^~ to override regex static file matching
-            # Create PHP auth gate — sets cookie then redirects to PMA
-            local pma_gate="/usr/share/phpmyadmin/az-wp-gate.php"
-            cat > "$pma_gate" <<'GATEPHP'
-<?php
-// az-wp token gate — sets cookie and redirects to phpMyAdmin
-$token = $_GET['token'] ?? '';
-GATEPHP
-            cat >> "$pma_gate" <<GATEPHP2
-\$valid_token = '${pma_token}';
-\$pma_path = '${pma_path}';
-GATEPHP2
-            cat >> "$pma_gate" <<'GATEPHP3'
-if ($token !== $valid_token) {
-    http_response_code(403);
-    die('Access denied.');
-}
-setcookie('pma_auth', $token, [
-    'path' => $pma_path . '/',
-    'httponly' => true,
-    'secure' => true,
-    'samesite' => 'Lax',
-]);
-header('Location: ' . $pma_path . '/index.php');
-exit;
-GATEPHP3
-
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
-    # phpMyAdmin — managed by az-wp (cookie-based access)
-
-    # Entry point: /pma-xxx/?token=XXX → sets cookie → redirects to index.php
-    location = ${pma_path}/ {
-        alias /usr/share/phpmyadmin/;
-        # If token param present, go through gate PHP to set cookie
-        if (\$arg_token) {
-            rewrite ^ ${pma_path}/az-wp-gate.php?\$args last;
-        }
-        # No token, no cookie → 403
-        if (\$cookie_pma_auth != "${pma_token}") {
-            return 403;
-        }
-        index index.php;
-    }
-
-    # phpMyAdmin files — require valid cookie
+    # phpMyAdmin — managed by az-wp
+    # Security: random 16-char hex path (unguessable URL)
     location ^~ ${pma_path}/ {
-        # Check cookie
-        if (\$cookie_pma_auth != "${pma_token}") {
-            return 403;
-        }
-
         alias /usr/share/phpmyadmin/;
         index index.php;
 
@@ -1159,35 +1109,33 @@ PHPCFG
 
             # Save to state
             state_set "PMA_PATH" "$pma_path"
-            state_set "PMA_TOKEN" "$pma_token"
 
-            local login_url="https://${DOMAIN}${pma_path}/?token=${pma_token}"
+            local login_url="https://${DOMAIN}${pma_path}/"
             log_success "phpMyAdmin enabled."
-            printf "\n  ${BOLD}Login URL (click to auto-login):${NC}\n"
+            printf "\n  ${BOLD}Login URL (auto-login, no password needed):${NC}\n"
             printf "  %s\n\n" "$login_url"
-            printf "  ${DIM}Token expires: never (regenerate with 'az-wp pma regenerate')${NC}\n"
+            printf "  ${DIM}Security: random URL path. Regenerate: az-wp pma regenerate${NC}\n"
             ;;
         disable)
             confirm "Disable phpMyAdmin?" || return 0
             rm -f /etc/nginx/az-wp-pma.conf
             rm -f /etc/phpmyadmin/conf.d/az-wp-autologin.php 2>/dev/null
+            rm -f /usr/share/phpmyadmin/az-wp-gate.php 2>/dev/null
             sed -i '/az-wp-pma.conf/d' "$nginx_conf" 2>/dev/null || true
             service_reload nginx
             log_success "phpMyAdmin disabled."
             ;;
         info|login)
-            local pma_path pma_token
+            local pma_path
             pma_path="$(state_get PMA_PATH 2>/dev/null)" || true
-            pma_token="$(state_get PMA_TOKEN 2>/dev/null)" || true
-            if [[ -z "$pma_path" || -z "$pma_token" ]]; then
+            if [[ -z "$pma_path" ]]; then
                 log_warn "phpMyAdmin not configured. Run 'az-wp pma enable' first."
                 return 0
             fi
-            local login_url="https://${DOMAIN}${pma_path}/?token=${pma_token}"
+            local login_url="https://${DOMAIN}${pma_path}/"
             printf "\n${BOLD}  phpMyAdmin Login URL:${NC}\n"
             printf "  %s\n\n" "$login_url"
-            printf "  ${DIM}Click the URL above — auto-login, no password needed.${NC}\n"
-            printf "  ${DIM}Regenerate: az-wp pma regenerate${NC}\n"
+            printf "  ${DIM}Auto-login, no password needed. Regenerate: az-wp pma regenerate${NC}\n"
             ;;
         regenerate)
             confirm "Regenerate phpMyAdmin URL and token?" || return 0
