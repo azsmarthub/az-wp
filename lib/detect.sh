@@ -106,32 +106,38 @@ preflight_checks() {
         failed=1
     fi
 
-    # --- Clean VPS ---
-    local svc
-    local clean=1
-    for svc in nginx apache2 mysql mariadb; do
-        if systemctl is-active --quiet "$svc" 2>/dev/null; then
-            printf "  ${RED}%-6s${NC} %s\n" "FAIL" "Service '$svc' is already active"
-            clean=0
-            failed=1
-        fi
-    done
-    if [[ "$clean" -eq 1 ]]; then
-        printf "  ${GREEN}%-6s${NC} %s\n" "OK" "Clean VPS (no existing web/db services)"
-    fi
+    # --- Clean VPS + Ports (skip when resuming a previous install) ---
+    local is_resume=0
+    [[ -f "$AZ_STATE_FILE" ]] && state_get DOMAIN &>/dev/null && is_resume=1
 
-    # --- Ports ---
-    local port
-    local ports_ok=1
-    for port in 80 443; do
-        if ss -tlnp | grep -q ":${port} " 2>/dev/null; then
-            printf "  ${RED}%-6s${NC} %s\n" "FAIL" "Port ${port} already in use"
-            ports_ok=0
-            failed=1
+    if [[ "$is_resume" -eq 1 ]]; then
+        printf "  ${GREEN}%-6s${NC} %s\n" "OK" "Resuming previous install (skip clean/port checks)"
+    else
+        local svc
+        local clean=1
+        for svc in nginx apache2 mysql mariadb; do
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                printf "  ${RED}%-6s${NC} %s\n" "FAIL" "Service '$svc' is already active"
+                clean=0
+                failed=1
+            fi
+        done
+        if [[ "$clean" -eq 1 ]]; then
+            printf "  ${GREEN}%-6s${NC} %s\n" "OK" "Clean VPS (no existing web/db services)"
         fi
-    done
-    if [[ "$ports_ok" -eq 1 ]]; then
-        printf "  ${GREEN}%-6s${NC} %s\n" "OK" "Ports 80/443 available"
+
+        local port
+        local ports_ok=1
+        for port in 80 443; do
+            if ss -tlnp | grep -q ":${port} " 2>/dev/null; then
+                printf "  ${RED}%-6s${NC} %s\n" "FAIL" "Port ${port} already in use"
+                ports_ok=0
+                failed=1
+            fi
+        done
+        if [[ "$ports_ok" -eq 1 ]]; then
+            printf "  ${GREEN}%-6s${NC} %s\n" "OK" "Ports 80/443 available"
+        fi
     fi
 
     # --- Internet ---
