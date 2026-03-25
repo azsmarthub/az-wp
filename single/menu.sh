@@ -1062,10 +1062,11 @@ FPMPOOL
             fi
 
             # Create nginx snippet — token-based access
+            # Use ^~ to override regex static file matching
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
     # phpMyAdmin — managed by az-wp (token-based access)
-    location ${pma_path}/ {
+    location ^~ ${pma_path}/ {
         # Block access without valid token
         set \$pma_allow 0;
         if (\$arg_token = "${pma_token}") { set \$pma_allow 1; }
