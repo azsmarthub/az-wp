@@ -44,6 +44,24 @@ source "$AZ_DIR/lib/tuning.sh"
 trap 'trap_error $LINENO "$BASH_COMMAND"' ERR
 
 # ---------------------------------------------------------------------------
+# Handle --reset flag
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "--reset" ]]; then
+    source "$AZ_DIR/lib/common.sh"
+    az_init
+    if [[ -f "$AZ_STATE_FILE" ]]; then
+        log_warn "This will DELETE all install state and start fresh."
+        log_warn "It does NOT uninstall packages already installed."
+        confirm "Are you sure?" || { echo "Aborted."; exit 0; }
+        rm -f "$AZ_STATE_FILE"
+        log_success "State file removed. Run install.sh again to start fresh."
+    else
+        log_info "No state file found. Already clean."
+    fi
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
 print_banner() {
