@@ -1057,6 +1057,7 @@ menu_phpmyadmin() {
         location ~ \.php\$ {
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
+            fastcgi_param PHP_ADMIN_VALUE "open_basedir=/usr/share/phpmyadmin:/tmp:/usr/share/php:/run/redis";
             fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
         }
     }
