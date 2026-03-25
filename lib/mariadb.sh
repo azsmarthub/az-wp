@@ -18,7 +18,7 @@ install_mariadb() {
 
     log_sub "Installing MariaDB server + client..."
     apt-get update -qq 2>/dev/null
-    apt-get install -y -q mariadb-server mariadb-client 2>&1 | grep -E "^(Setting up mariadb)" | tail -3
+    apt-get install -y -q mariadb-server mariadb-client 2>&1 | grep -E "^(Setting up mariadb)" | tail -3 || true
 
     systemctl enable mariadb 2>/dev/null
 

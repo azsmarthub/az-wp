@@ -188,16 +188,16 @@ step_system_prep() {
 
     # System update — show progress, this can take 1-3 min on fresh VPS
     log_sub "Updating package lists..."
-    apt-get update -qq 2>&1 | tail -1
+    apt-get update -qq 2>&1 | tail -1 || true
     log_sub "Upgrading system packages (this may take a few minutes)..."
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -q 2>&1 | grep -E "^(Get|Fetched|Reading|Unpacking|Setting up|[0-9]+ upgraded)" | tail -5
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -q 2>&1 | grep -E "^(Get|Fetched|Reading|Unpacking|Setting up|[0-9]+ upgraded)" | tail -5 || true
 
     # Essential packages
     log_sub "Installing base packages (curl, git, htop, etc.)..."
     DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
         curl wget gnupg software-properties-common unzip git bc \
         htop ncdu logrotate apt-transport-https ca-certificates lsb-release \
-        2>&1 | grep -E "^(Setting up|[0-9]+ newly)" | tail -3
+        2>&1 | grep -E "^(Setting up|[0-9]+ newly)" | tail -3 || true
 
     # Swap
     if ! swapon --show | grep -q '/'; then

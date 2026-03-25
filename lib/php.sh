@@ -31,7 +31,7 @@ install_php() {
         "php${PHP_VERSION}-opcache" \
         "php${PHP_VERSION}-redis" \
         "php${PHP_VERSION}-igbinary" \
-        2>&1 | grep -E "^(Setting up php)" | tail -5
+        2>&1 | grep -E "^(Setting up php)" | tail -5 || true
 
     systemctl enable "php${PHP_VERSION}-fpm" 2>/dev/null
 

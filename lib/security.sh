@@ -32,7 +32,7 @@ harden_ssh() {
 # Unattended Upgrades
 # ---------------------------------------------------------------------------
 setup_unattended_upgrades() {
-    apt-get install -y -q unattended-upgrades 2>&1 | grep -E "^(Setting up)" | tail -3
+    apt-get install -y -q unattended-upgrades 2>&1 | grep -E "^(Setting up)" | tail -3 || true
 
     local conf="/etc/apt/apt.conf.d/20auto-upgrades"
 

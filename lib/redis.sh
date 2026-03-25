@@ -9,7 +9,7 @@ _AZ_REDIS_LOADED=1
 install_redis() {
     log_sub "Installing Redis..."
 
-    apt-get install -y -q redis-server 2>&1 | grep -E "^(Setting up)" | tail -3
+    apt-get install -y -q redis-server 2>&1 | grep -E "^(Setting up)" | tail -3 || true
 
     systemctl enable redis-server
 

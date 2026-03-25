@@ -21,7 +21,7 @@ install_nginx() {
 
     log_sub "Installing Nginx..."
     apt-get update -qq 2>/dev/null
-    apt-get install -y -qq nginx 2>&1 | grep -E "^(Setting up|nginx)" | tail -2
+    apt-get install -y -qq nginx 2>&1 | grep -E "^(Setting up)" | tail -2 || true
 
     systemctl enable nginx 2>/dev/null
 
