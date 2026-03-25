@@ -1067,20 +1067,25 @@ FPMPOOL
             cat > "$pma_snippet" <<PMACONF
     # phpMyAdmin — managed by az-wp (token-based access)
     location ^~ ${pma_path}/ {
-        # Block access without valid token
-        set \$pma_allow 0;
-        if (\$arg_token = "${pma_token}") { set \$pma_allow 1; }
-        if (\$cookie_pma_token = "${pma_token}") { set \$pma_allow 1; }
-        if (\$pma_allow = 0) { return 403; }
-
         alias /usr/share/phpmyadmin/;
         index index.php;
 
+        # PHP files require token (main entry points)
         location ~ \.php\$ {
+            # Check token in query string or cookie
+            set \$pma_allow 0;
+            if (\$arg_token = "${pma_token}") { set \$pma_allow 1; }
+            if (\$cookie_pma_token = "${pma_token}") { set \$pma_allow 1; }
+            if (\$http_referer ~ "${pma_path}/") { set \$pma_allow 1; }
+            if (\$pma_allow = 0) { return 403; }
+
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
             fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-pma.sock;
         }
+
+        # Static files (js/css/images) — allow if referer is from PMA
+        # No token needed for assets, they're not sensitive
     }
     # end phpMyAdmin
 PMACONF
