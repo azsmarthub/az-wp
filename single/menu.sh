@@ -1037,8 +1037,31 @@ menu_phpmyadmin() {
             local pma_token
             pma_token="$(openssl rand -hex 32)"
 
-            # Create nginx snippet — token-based access (no Basic Auth)
-            # Only requests with ?token=XXX are allowed
+            # Create dedicated FPM pool for phpMyAdmin (runs as www-data)
+            local pma_pool="/etc/php/${PHP_VERSION}/fpm/pool.d/phpmyadmin.conf"
+            if [[ ! -f "$pma_pool" ]]; then
+                cat > "$pma_pool" <<FPMPOOL
+[phpmyadmin]
+user = www-data
+group = www-data
+listen = /run/php/php${PHP_VERSION}-fpm-pma.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 2
+pm.process_idle_timeout = 60s
+request_terminate_timeout = 300
+php_admin_value[open_basedir] = /usr/share/phpmyadmin:/tmp:/var/lib/phpmyadmin:/etc/phpmyadmin:/usr/share/php
+php_admin_value[upload_max_filesize] = 256M
+php_admin_value[post_max_size] = 256M
+php_admin_value[max_execution_time] = 300
+FPMPOOL
+                systemctl restart "php${PHP_VERSION}-fpm"
+                log_sub "phpMyAdmin FPM pool created."
+            fi
+
+            # Create nginx snippet — token-based access
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
     # phpMyAdmin — managed by az-wp (token-based access)
@@ -1055,8 +1078,7 @@ menu_phpmyadmin() {
         location ~ \.php\$ {
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
-            fastcgi_param PHP_ADMIN_VALUE "open_basedir=/usr/share/phpmyadmin:/tmp:/usr/share/php:/var/lib/phpmyadmin:/etc/phpmyadmin";
-            fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
+            fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-pma.sock;
         }
     }
     # end phpMyAdmin
@@ -1071,19 +1093,17 @@ PMACONF
             # Create auto-login config for phpMyAdmin
             local pma_config_dir="/etc/phpmyadmin/conf.d"
             mkdir -p "$pma_config_dir"
-            local db_name db_user db_pass
-            db_name="$(state_get DB_NAME)" || db_name=""
+            local db_user db_pass
             db_user="$(state_get DB_USER)" || db_user=""
             db_pass="$(state_get DB_PASS)" || db_pass=""
 
             cat > "$pma_config_dir/az-wp-autologin.php" <<PHPCFG
 <?php
-// Auto-login configuration — managed by az-wp
+// Auto-login — managed by az-wp
 \$cfg['Servers'][1]['auth_type'] = 'config';
 \$cfg['Servers'][1]['user'] = '${db_user}';
 \$cfg['Servers'][1]['password'] = '${db_pass}';
 \$cfg['Servers'][1]['AllowNoPassword'] = false;
-\$cfg['LoginCookieValidity'] = 3600;
 PHPCFG
 
             if nginx -t 2>/dev/null; then
