@@ -1005,10 +1005,10 @@ menu_phpmyadmin() {
 
     if [[ -z "$sub" ]]; then
         printf "\n${BOLD}  phpMyAdmin Management${NC}\n"
-        printf "  1) Enable (install + configure)\n"
+        printf "  1) Enable (install + auto-login)\n"
         printf "  2) Disable\n"
-        printf "  3) Show access info\n"
-        printf "  4) Regenerate URL + password\n"
+        printf "  3) Get login URL\n"
+        printf "  4) Regenerate URL + token\n"
         printf "  0) Back\n\n"
         read -rp "  Choose [0-4]: " sub
         case "$sub" in
@@ -1027,37 +1027,35 @@ menu_phpmyadmin() {
             # Install phpMyAdmin if not present
             if [[ ! -d /usr/share/phpmyadmin ]]; then
                 log_info "Installing phpMyAdmin..."
-                DEBIAN_FRONTEND=noninteractive apt-get install -y phpmyadmin >/dev/null 2>&1 \
+                NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y phpmyadmin > /dev/null 2>&1 \
                     || die "Failed to install phpMyAdmin."
                 log_success "phpMyAdmin installed."
             fi
 
-            # Generate random path and credentials
-            local pma_path="/pma-$(openssl rand -hex 4)"
-            local pma_user="pma_admin"
-            local pma_pass
-            pma_pass="$(generate_password 16)"
+            # Generate random URL path (security through obscurity + token)
+            local pma_path="/pma-$(openssl rand -hex 8)"
+            local pma_token
+            pma_token="$(openssl rand -hex 32)"
 
-            # Create htpasswd
-            local htpasswd_file="/etc/nginx/.pma_htpasswd"
-            printf '%s:%s\n' "$pma_user" "$(openssl passwd -apr1 "$pma_pass")" > "$htpasswd_file"
-
-            # Remove old block if exists
-            sed -i '/# phpMyAdmin.*managed by az-wp/,/# end phpMyAdmin/d' "$nginx_conf" 2>/dev/null || true
-
-            # Create pma nginx snippet
+            # Create nginx snippet — token-based access (no Basic Auth)
+            # Only requests with ?token=XXX are allowed
             local pma_snippet="/etc/nginx/az-wp-pma.conf"
             cat > "$pma_snippet" <<PMACONF
-    # phpMyAdmin — managed by az-wp
+    # phpMyAdmin — managed by az-wp (token-based access)
     location ${pma_path}/ {
+        # Block access without valid token
+        set \$pma_allow 0;
+        if (\$arg_token = "${pma_token}") { set \$pma_allow 1; }
+        if (\$cookie_pma_token = "${pma_token}") { set \$pma_allow 1; }
+        if (\$pma_allow = 0) { return 403; }
+
         alias /usr/share/phpmyadmin/;
         index index.php;
-        auth_basic "Restricted";
-        auth_basic_user_file ${htpasswd_file};
+
         location ~ \.php\$ {
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME \$request_filename;
-            fastcgi_param PHP_ADMIN_VALUE "open_basedir=/usr/share/phpmyadmin:/tmp:/usr/share/php:/run/redis";
+            fastcgi_param PHP_ADMIN_VALUE "open_basedir=/usr/share/phpmyadmin:/tmp:/usr/share/php:/var/lib/phpmyadmin:/etc/phpmyadmin";
             fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
         }
     }
@@ -1065,9 +1063,28 @@ menu_phpmyadmin() {
 PMACONF
 
             # Inject include before closing } of server block
+            sed -i '/az-wp-pma.conf/d' "$nginx_conf" 2>/dev/null || true
             if ! grep -q "az-wp-pma.conf" "$nginx_conf"; then
                 sed -i '/^}$/i \    include /etc/nginx/az-wp-pma.conf;' "$nginx_conf"
             fi
+
+            # Create auto-login config for phpMyAdmin
+            local pma_config_dir="/etc/phpmyadmin/conf.d"
+            mkdir -p "$pma_config_dir"
+            local db_name db_user db_pass
+            db_name="$(state_get DB_NAME)" || db_name=""
+            db_user="$(state_get DB_USER)" || db_user=""
+            db_pass="$(state_get DB_PASS)" || db_pass=""
+
+            cat > "$pma_config_dir/az-wp-autologin.php" <<PHPCFG
+<?php
+// Auto-login configuration — managed by az-wp
+\$cfg['Servers'][1]['auth_type'] = 'config';
+\$cfg['Servers'][1]['user'] = '${db_user}';
+\$cfg['Servers'][1]['password'] = '${db_pass}';
+\$cfg['Servers'][1]['AllowNoPassword'] = false;
+\$cfg['LoginCookieValidity'] = 3600;
+PHPCFG
 
             if nginx -t 2>/dev/null; then
                 service_reload nginx
@@ -1080,41 +1097,41 @@ PMACONF
 
             # Save to state
             state_set "PMA_PATH" "$pma_path"
-            state_set "PMA_USER" "$pma_user"
-            state_set "PMA_PASS" "$pma_pass"
+            state_set "PMA_TOKEN" "$pma_token"
 
+            local login_url="https://${DOMAIN}${pma_path}/?token=${pma_token}"
             log_success "phpMyAdmin enabled."
-            printf "\n  URL:      https://%s%s\n" "$DOMAIN" "$pma_path"
-            printf "  Username: %s\n" "$pma_user"
-            printf "  Password: %s\n" "$pma_pass"
+            printf "\n  ${BOLD}Login URL (click to auto-login):${NC}\n"
+            printf "  %s\n\n" "$login_url"
+            printf "  ${DIM}Token expires: never (regenerate with 'az-wp pma regenerate')${NC}\n"
             ;;
         disable)
             confirm "Disable phpMyAdmin?" || return 0
             rm -f /etc/nginx/az-wp-pma.conf
+            rm -f /etc/phpmyadmin/conf.d/az-wp-autologin.php 2>/dev/null
             sed -i '/az-wp-pma.conf/d' "$nginx_conf" 2>/dev/null || true
             service_reload nginx
             log_success "phpMyAdmin disabled."
             ;;
-        info)
-            local pma_path pma_user pma_pass
+        info|login)
+            local pma_path pma_token
             pma_path="$(state_get PMA_PATH 2>/dev/null)" || true
-            pma_user="$(state_get PMA_USER 2>/dev/null)" || true
-            pma_pass="$(state_get PMA_PASS 2>/dev/null)" || true
-            if [[ -z "$pma_path" ]]; then
+            pma_token="$(state_get PMA_TOKEN 2>/dev/null)" || true
+            if [[ -z "$pma_path" || -z "$pma_token" ]]; then
                 log_warn "phpMyAdmin not configured. Run 'az-wp pma enable' first."
                 return 0
             fi
-            printf "\n${BOLD}  phpMyAdmin Access${NC}\n"
-            printf "  URL:      https://%s%s\n" "$DOMAIN" "$pma_path"
-            printf "  Username: %s\n" "$pma_user"
-            printf "  Password: %s\n" "$pma_pass"
-            printf "\n  DB User:  %s\n" "$DB_USER"
-            printf "  DB Pass:  %s\n" "$DB_PASS"
+            local login_url="https://${DOMAIN}${pma_path}/?token=${pma_token}"
+            printf "\n${BOLD}  phpMyAdmin Login URL:${NC}\n"
+            printf "  %s\n\n" "$login_url"
+            printf "  ${DIM}Click the URL above — auto-login, no password needed.${NC}\n"
+            printf "  ${DIM}Regenerate: az-wp pma regenerate${NC}\n"
             ;;
         regenerate)
-            confirm "Regenerate phpMyAdmin URL and password?" || return 0
-            # Disable first, then re-enable
-            sed -i '/# phpMyAdmin.*managed by az-wp/,/# end phpMyAdmin/d' "$nginx_conf" 2>/dev/null || true
+            confirm "Regenerate phpMyAdmin URL and token?" || return 0
+            rm -f /etc/nginx/az-wp-pma.conf
+            rm -f /etc/phpmyadmin/conf.d/az-wp-autologin.php 2>/dev/null
+            sed -i '/az-wp-pma.conf/d' "$nginx_conf" 2>/dev/null || true
             menu_phpmyadmin enable
             ;;
         *)
