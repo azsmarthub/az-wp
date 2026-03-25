@@ -777,12 +777,31 @@ menu_advanced() {
                     ;;
                 fpm)
                     printf "\n  ${BOLD}Web pool:${NC}\n"
-                    curl -s http://127.0.0.1/fpm-status 2>/dev/null || printf "  (status page not accessible)\n"
+                    curl -sf http://127.0.0.1/fpm-status 2>/dev/null | sed 's/^/  /' || printf "  (not accessible — check nginx fpm-status location)\n"
                     printf "\n  ${BOLD}Workers pool:${NC}\n"
-                    curl -s http://127.0.0.1/fpm-workers-status 2>/dev/null || printf "  (status page not accessible)\n"
+                    curl -sf http://127.0.0.1/fpm-workers-status 2>/dev/null | sed 's/^/  /' || printf "  (not accessible — check nginx fpm-workers-status location)\n"
                     ;;
                 opcache)
-                    php -r 'print_r(opcache_get_status(false));' 2>/dev/null || printf "  OPcache not available on CLI.\n"
+                    # Query OPcache via FPM (CLI has opcache disabled)
+                    local opcache_tmp="$WEB_ROOT/_az_opcache_check.php"
+                    cat > "$opcache_tmp" <<'OPCPHP'
+<?php
+$s = opcache_get_status(false);
+if (!$s) { echo "OPcache: DISABLED\n"; exit; }
+$m = $s['memory_usage'];
+$j = $s['jit'] ?? [];
+printf("OPcache:     ENABLED\n");
+printf("Memory:      %s MB used / %s MB free\n", round($m['used_memory']/1048576,1), round($m['free_memory']/1048576,1));
+printf("Scripts:     %d cached\n", $s['opcache_statistics']['num_cached_scripts'] ?? 0);
+printf("Hit rate:    %.1f%%\n", $s['opcache_statistics']['opcache_hit_rate'] ?? 0);
+if (!empty($j['enabled'])) { printf("JIT:         ENABLED (%s MB buffer)\n", round($j['buffer_size']/1048576)); }
+else { printf("JIT:         DISABLED\n"); }
+OPCPHP
+                    chown "$SITE_USER:$SITE_USER" "$opcache_tmp"
+                    printf "\n"
+                    curl -sf --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/_az_opcache_check.php" 2>/dev/null \
+                        || printf "  Could not query OPcache via FPM.\n"
+                    rm -f "$opcache_tmp"
                     ;;
                 reload-fpm)
                     service_restart "php${PHP_VERSION}-fpm"

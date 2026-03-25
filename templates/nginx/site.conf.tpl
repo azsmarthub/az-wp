@@ -105,8 +105,8 @@ server {
         allow 127.0.0.1;
         deny all;
         include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /fpm-status;
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     }
 
     location = /fpm-workers-status {
@@ -114,8 +114,8 @@ server {
         allow 127.0.0.1;
         deny all;
         include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /fpm-workers-status;
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-workers.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     }
 
     # ==========================================================
