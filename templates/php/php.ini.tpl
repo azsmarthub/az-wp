@@ -34,4 +34,4 @@ realpath_cache_ttl = 600
 
 ; Security - FPM only (CLI not affected)
 disable_functions = exec,passthru,shell_exec,system,proc_open,popen
-open_basedir = ${WEB_ROOT}:/tmp:/usr/share/php
+open_basedir = ${WEB_ROOT}:/tmp:/usr/share/php:/run/redis
