@@ -137,20 +137,20 @@ calculate_tune() {
         TUNE_WORKERS_PROCESS_IDLE_TIMEOUT="30s"
     fi
 
-    # FastCGI cache sizing based on disk
+    # FastCGI cache sizing — generous allocation (single site, disk not shared)
     local disk="${DISK_FREE_GB:-20}"
     if [[ "$disk" -lt 20 ]]; then
         TUNE_CACHE_KEYS_ZONE="64m"
-        TUNE_CACHE_MAX_SIZE="2g"
+        TUNE_CACHE_MAX_SIZE="5g"
     elif [[ "$disk" -lt 50 ]]; then
         TUNE_CACHE_KEYS_ZONE="128m"
-        TUNE_CACHE_MAX_SIZE="5g"
+        TUNE_CACHE_MAX_SIZE="20g"
     elif [[ "$disk" -lt 100 ]]; then
         TUNE_CACHE_KEYS_ZONE="256m"
-        TUNE_CACHE_MAX_SIZE="10g"
+        TUNE_CACHE_MAX_SIZE="50g"
     else
         TUNE_CACHE_KEYS_ZONE="256m"
-        TUNE_CACHE_MAX_SIZE="20g"
+        TUNE_CACHE_MAX_SIZE="100g"
     fi
 
     # MariaDB advanced tuning (scaled by tier)
