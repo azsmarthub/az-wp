@@ -1422,18 +1422,28 @@ _advanced_action() {
             local sec_sub="${2:-}"
             if [[ -z "$sec_sub" ]]; then
                 _header "Security"
+                # Show current alert email
+                local alert_email
+                alert_email="$(config_get SECURITY_ALERT_EMAIL 2>/dev/null)" || alert_email=""
+                if [[ -z "$alert_email" ]]; then
+                    alert_email="$(wp_run option get admin_email 2>/dev/null | tr -d '[:space:]')" || alert_email="(admin email)"
+                fi
+                printf "  ${DIM}Alert email: %s${NC}\n\n" "$alert_email"
+
                 printf "  1) Run security scan (quick)\n"
                 printf "  2) Run full scan (checksums + malware)\n"
                 printf "  3) View scan logs\n"
-                printf "  4) Fail2Ban status\n"
-                printf "  5) Unban IP\n"
-                printf "  6) UFW status\n"
+                printf "  4) Change alert email\n"
+                printf "  5) Fail2Ban status\n"
+                printf "  6) Unban IP\n"
+                printf "  7) UFW status\n"
                 printf "  0) Back\n\n"
                 read -rp "  Choose: " sec_sub
                 case "$sec_sub" in
                     1) sec_sub="scan-daily" ;; 2) sec_sub="scan-weekly" ;;
-                    3) sec_sub="scan-logs" ;; 4) sec_sub="f2b-status" ;;
-                    5) sec_sub="unban" ;; 6) sec_sub="ufw" ;; *) return 0 ;;
+                    3) sec_sub="scan-logs" ;; 4) sec_sub="alert-email" ;;
+                    5) sec_sub="f2b-status" ;; 6) sec_sub="unban" ;;
+                    7) sec_sub="ufw" ;; *) return 0 ;;
                 esac
             fi
             case "$sec_sub" in
@@ -1468,6 +1478,21 @@ _advanced_action() {
                         printf "\n  ${DIM}View latest: tail -50 %s/scan-$(date '+%%Y-%%m-%%d').log${NC}\n" "$log_dir"
                     else
                         printf "  No scan logs yet.\n"
+                    fi
+                    ;;
+                alert-email)
+                    local current_email
+                    current_email="$(config_get SECURITY_ALERT_EMAIL 2>/dev/null)" || current_email=""
+                    if [[ -z "$current_email" ]]; then
+                        current_email="$(wp_run option get admin_email 2>/dev/null | tr -d '[:space:]')" || current_email=""
+                    fi
+                    printf "  Current: %s\n" "${current_email:-not set}"
+                    printf "  ${DIM}Default: WP admin email (user ID 1)${NC}\n\n"
+                    local new_email
+                    read -rp "  New alert email (ENTER to keep current): " new_email
+                    if [[ -n "$new_email" ]]; then
+                        config_set "SECURITY_ALERT_EMAIL" "$new_email"
+                        log_success "Alert email set to: $new_email"
                     fi
                     ;;
                 f2b-status) fail2ban-client status 2>/dev/null; for jail in $(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*://;s/,/ /g'); do printf "\n"; fail2ban-client status "$jail" 2>/dev/null; done ;;

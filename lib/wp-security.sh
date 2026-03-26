@@ -87,8 +87,14 @@ alert() { ISSUES_FOUND=$((ISSUES_FOUND + 1)); REPORT="${REPORT}\n⚠ $1"; log "A
 
 mkdir -p "$LOG_DIR"
 
-# Get admin email from WordPress
-ADMIN_EMAIL=$(sudo -u "$SITE_USER" wp option get admin_email --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated | tr -d '[:space:]') || ADMIN_EMAIL=""
+# Get alert email: custom config > WP admin email
+ADMIN_EMAIL=""
+if [[ -f /etc/az-wp/config ]]; then
+    ADMIN_EMAIL=$(grep "^SECURITY_ALERT_EMAIL=" /etc/az-wp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
+fi
+if [[ -z "$ADMIN_EMAIL" ]]; then
+    ADMIN_EMAIL=$(sudo -u "$SITE_USER" wp option get admin_email --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated | tr -d '[:space:]') || ADMIN_EMAIL=""
+fi
 
 log "=== Security Scan Started ==="
 log "Domain: $DOMAIN"
