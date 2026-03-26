@@ -1485,35 +1485,84 @@ _advanced_action() {
                     ;;
                 telegram-setup)
                     _header "Telegram Alert Setup"
-                    printf "  ${BOLD}How to get Bot Token:${NC}\n"
-                    printf "  1. Open Telegram, search @BotFather\n"
-                    printf "  2. Send /newbot, follow instructions\n"
-                    printf "  3. Copy the token (e.g. 123456:ABC-DEF...)\n\n"
-                    printf "  ${BOLD}How to get Chat ID:${NC}\n"
-                    printf "  1. Send a message to your bot\n"
-                    printf "  2. Open: https://api.telegram.org/bot<TOKEN>/getUpdates\n"
-                    printf "  3. Find \"chat\":{\"id\":XXXXXXX}\n\n"
 
                     local cur_token cur_chat
                     cur_token="$(config_get TG_BOT_TOKEN 2>/dev/null)" || cur_token=""
                     cur_chat="$(config_get TG_CHAT_ID 2>/dev/null)" || cur_chat=""
 
-                    local new_token new_chat
-                    read -rp "  Bot Token (ENTER to keep ${cur_token:+current}${cur_token:-empty}): " new_token
-                    [[ -n "$new_token" ]] && config_set "TG_BOT_TOKEN" "$new_token" && cur_token="$new_token"
-                    read -rp "  Chat ID  (ENTER to keep ${cur_chat:+current}${cur_chat:-empty}): " new_chat
-                    [[ -n "$new_chat" ]] && config_set "TG_CHAT_ID" "$new_chat" && cur_chat="$new_chat"
-
                     if [[ -n "$cur_token" && -n "$cur_chat" ]]; then
-                        # Regenerate scan script with new config
-                        if [[ -f "$AZ_DIR/lib/wp-security.sh" ]]; then
-                            source "$AZ_DIR/lib/wp-security.sh"
-                            create_scan_script "$SITE_USER" "$WEB_ROOT" "$DOMAIN"
-                        fi
-                        log_success "Telegram configured. Run test: az-wp advanced security telegram-test"
-                    else
-                        log_warn "Both Token and Chat ID required."
+                        printf "  ${GREEN}Currently configured${NC}\n"
+                        printf "  Token: %s...%s\n" "${cur_token:0:10}" "${cur_token: -5}"
+                        printf "  Chat ID: %s\n\n" "$cur_chat"
+                        printf "  1) Reconfigure\n  2) Remove\n  0) Back\n\n"
+                        local tg_choice
+                        read -rp "  Choose: " tg_choice
+                        case "$tg_choice" in
+                            2) config_set "TG_BOT_TOKEN" ""; config_set "TG_CHAT_ID" ""
+                               log_success "Telegram alerts removed." ; return 0 ;;
+                            1) ;; # continue to setup
+                            *) return 0 ;;
+                        esac
                     fi
+
+                    printf "  ${BOLD}Step 1:${NC} Create a Telegram Bot\n"
+                    printf "  → Open Telegram, search ${BOLD}@BotFather${NC}\n"
+                    printf "  → Send ${BOLD}/newbot${NC}, follow instructions\n"
+                    printf "  → Copy the Bot Token\n\n"
+
+                    local new_token
+                    read -rp "  Paste Bot Token: " new_token
+                    [[ -z "$new_token" ]] && { log_warn "Token required."; return 0; }
+
+                    # Validate token
+                    local bot_info
+                    bot_info="$(curl -sf "https://api.telegram.org/bot${new_token}/getMe" 2>/dev/null)"
+                    if ! echo "$bot_info" | grep -q '"ok":true'; then
+                        log_error "Invalid Bot Token. Check and try again."
+                        return 0
+                    fi
+                    local bot_name
+                    bot_name="$(echo "$bot_info" | grep -oP '"username":"[^"]+' | cut -d'"' -f4)" || bot_name="your_bot"
+                    log_success "Bot verified: @${bot_name}"
+
+                    printf "\n  ${BOLD}Step 2:${NC} Send a message to your bot\n"
+                    printf "  → Open Telegram, search ${BOLD}@${bot_name}${NC}\n"
+                    printf "  → Send any message (e.g. \"hello\")\n"
+                    printf "  → Then press ENTER here\n\n"
+                    read -rp "  Press ENTER after sending message to bot..." _
+
+                    # Auto-detect Chat ID from getUpdates
+                    local updates
+                    updates="$(curl -sf "https://api.telegram.org/bot${new_token}/getUpdates" 2>/dev/null)"
+                    local new_chat
+                    new_chat="$(echo "$updates" | grep -oP '"chat":\{"id":(-?[0-9]+)' | head -1 | grep -oP '(-?[0-9]+)$')" || new_chat=""
+
+                    if [[ -z "$new_chat" ]]; then
+                        log_warn "Could not detect Chat ID. Make sure you sent a message to @${bot_name}"
+                        printf "\n  ${DIM}You can enter Chat ID manually:${NC}\n"
+                        read -rp "  Chat ID: " new_chat
+                        [[ -z "$new_chat" ]] && { log_warn "Chat ID required."; return 0; }
+                    else
+                        log_success "Chat ID detected: ${new_chat}"
+                    fi
+
+                    # Save config
+                    config_set "TG_BOT_TOKEN" "$new_token"
+                    config_set "TG_CHAT_ID" "$new_chat"
+
+                    # Regenerate scan script
+                    if [[ -f "$AZ_DIR/lib/wp-security.sh" ]]; then
+                        source "$AZ_DIR/lib/wp-security.sh"
+                        create_scan_script "$SITE_USER" "$WEB_ROOT" "$DOMAIN"
+                    fi
+
+                    # Send confirmation message
+                    curl -sf -X POST "https://api.telegram.org/bot${new_token}/sendMessage" \
+                        -d "chat_id=${new_chat}" \
+                        -d "text=✅ az-wp alerts configured for ${DOMAIN}" \
+                        -d "parse_mode=Markdown" > /dev/null 2>&1
+
+                    log_success "Telegram alerts configured! Confirmation sent to your Telegram."
                     ;;
                 telegram-test)
                     local tg_token tg_chat
