@@ -1289,7 +1289,8 @@ menu_advanced() {
                 printf "  Total: %s loaded\n\n" "$ext_count"
 
                 # Show key extensions with status
-                local key_exts="bcmath curl dom exif fileinfo gd iconv igbinary imagick intl mbstring mysqli opcache pdo_mysql redis soap xml zip"
+                # Use FPM check for OPcache (CLI has it disabled)
+                local key_exts="bcmath curl dom exif fileinfo gd iconv igbinary imagick intl mbstring mysqli pdo_mysql redis soap xml zip"
                 for ext in $key_exts; do
                     if php${PHP_VERSION} -m 2>/dev/null | grep -qi "^${ext}$"; then
                         printf "    ${GREEN}%-15s ON${NC}\n" "$ext"
@@ -1297,6 +1298,17 @@ menu_advanced() {
                         printf "    ${RED}%-15s OFF${NC}\n" "$ext"
                     fi
                 done
+                # OPcache special check — always ON in FPM if config exists
+                if [[ -f "/etc/php/${PHP_VERSION}/fpm/conf.d/10-opcache-az.ini" ]]; then
+                    local oc_on; oc_on="$(grep 'opcache.enable ' "/etc/php/${PHP_VERSION}/fpm/conf.d/10-opcache-az.ini" | cut -d= -f2 | tr -d ' ')"
+                    if [[ "$oc_on" == "1" ]]; then
+                        printf "    ${GREEN}%-15s ON${NC}  ${DIM}(FPM only, CLI disabled by design)${NC}\n" "opcache"
+                    else
+                        printf "    ${RED}%-15s OFF${NC}\n" "opcache"
+                    fi
+                else
+                    printf "    ${RED}%-15s OFF${NC}  ${DIM}(no config found)${NC}\n" "opcache"
+                fi
 
                 printf "\n  1) Install extension\n"
                 printf "  2) Show all loaded modules\n"
