@@ -19,17 +19,16 @@ install_security_tools() {
     log_sub "Installing WP-CLI doctor..."
     sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --path="$WEB_ROOT" > /dev/null 2>&1 || true
 
-    # Wordfence CLI — install with timeout (max 90s, won't block install)
-    log_sub "Installing Wordfence CLI (max 90s)..."
+    # Wordfence CLI — install in background (won't block install)
     apt_install python3-pip python3-venv || true
     if command -v pip3 >/dev/null 2>&1; then
-        timeout 90 pip3 install --break-system-packages --no-cache-dir wordfence > /dev/null 2>&1 || \
-            timeout 90 pip3 install --no-cache-dir wordfence > /dev/null 2>&1 || \
-            log_warn "Wordfence CLI: timeout/failed (install later: pip3 install wordfence)"
-        if command -v wordfence >/dev/null 2>&1; then
+        log_sub "Installing Wordfence CLI (background — continues while install proceeds)..."
+        (
+            pip3 install --break-system-packages --no-cache-dir wordfence > /dev/null 2>&1 || \
+                pip3 install --no-cache-dir wordfence > /dev/null 2>&1 || exit 1
             wordfence configure --default --accept-terms > /dev/null 2>&1 || true
-            log_sub "Wordfence CLI installed + configured"
-        fi
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Wordfence CLI installed + configured" >> "${AZ_SECURITY_LOG_DIR}/install.log"
+        ) &
     fi
 
     # Telegram alerts — no extra packages needed (uses curl)
