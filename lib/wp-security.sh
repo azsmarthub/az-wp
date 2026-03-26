@@ -15,25 +15,22 @@ AZ_SECURITY_SCRIPT="/usr/local/bin/az-wp-security-scan"
 install_security_tools() {
     log_sub "Installing security scan tools..."
 
-    # Install pip3 + Wordfence CLI (all optional — won't crash if fail)
-    log_sub "Installing Wordfence CLI (optional)..."
-    apt_install python3-pip python3-venv || true
-    if command -v pip3 >/dev/null 2>&1; then
-        pip3 install --break-system-packages wordfence > /dev/null 2>&1 || \
-            pip3 install wordfence > /dev/null 2>&1 || \
-            log_warn "Wordfence CLI install failed (optional — scan will use checksums only)"
-        # Accept Wordfence free license non-interactively
-        if command -v wordfence >/dev/null 2>&1; then
-            wordfence configure --default --accept-terms > /dev/null 2>&1 || true
-            log_sub "Wordfence CLI configured (free license)"
-        fi
-    else
-        log_warn "pip3 not available — Wordfence CLI skipped"
-    fi
-
-    # Install wp-cli doctor command (optional)
+    # WP-CLI doctor (lightweight, fast)
     log_sub "Installing WP-CLI doctor..."
     sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --path="$WEB_ROOT" > /dev/null 2>&1 || true
+
+    # Wordfence CLI — install with timeout (max 90s, won't block install)
+    log_sub "Installing Wordfence CLI (max 90s)..."
+    apt_install python3-pip python3-venv || true
+    if command -v pip3 >/dev/null 2>&1; then
+        timeout 90 pip3 install --break-system-packages --no-cache-dir wordfence > /dev/null 2>&1 || \
+            timeout 90 pip3 install --no-cache-dir wordfence > /dev/null 2>&1 || \
+            log_warn "Wordfence CLI: timeout/failed (install later: pip3 install wordfence)"
+        if command -v wordfence >/dev/null 2>&1; then
+            wordfence configure --default --accept-terms > /dev/null 2>&1 || true
+            log_sub "Wordfence CLI installed + configured"
+        fi
+    fi
 
     # Telegram alerts — no extra packages needed (uses curl)
 
