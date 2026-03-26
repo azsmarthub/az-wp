@@ -33,5 +33,7 @@ realpath_cache_size = 4096K
 realpath_cache_ttl = 600
 
 ; Security - FPM only (CLI not affected)
-disable_functions = exec,passthru,shell_exec,system,proc_open,popen
+; Note: exec is allowed because AffiliateCMS CachePreload needs it
+; for cache management (ps, find, nginx-cache-purge)
+disable_functions = passthru,shell_exec,system,proc_open,popen
 open_basedir = ${WEB_ROOT}:/tmp:/usr/share/php:/run/redis
