@@ -1764,7 +1764,11 @@ This is a test message from az-wp security scanner."
             cf_token="$(config_get CF_API_TOKEN 2>/dev/null)" || cf_token=""
             cf_zone="$(config_get CF_ZONE_ID 2>/dev/null)" || cf_zone=""
 
-            if [[ -n "$cf_token" && -n "$cf_zone" ]]; then
+            local cf_email_saved cf_key_saved
+            cf_email_saved="$(config_get CF_EMAIL 2>/dev/null)" || cf_email_saved=""
+            cf_key_saved="$(config_get CF_API_KEY 2>/dev/null)" || cf_key_saved=""
+
+            if [[ -n "$cf_key_saved" && -n "$cf_zone" ]]; then
                 printf "  ${GREEN}Configured${NC}\n"
                 printf "  Zone ID: %s\n\n" "$cf_zone"
                 printf "  1) Check cache rule status\n"
@@ -1777,7 +1781,8 @@ This is a test message from az-wp security scanner."
                     1)
                         local rules
                         rules="$(curl -sf -X GET "https://api.cloudflare.com/client/v4/zones/${cf_zone}/rulesets/phases/http_request_cache_settings/entrypoint" \
-                            -H "Authorization: Bearer ${cf_token}" -H "Content-Type: application/json" 2>/dev/null)"
+                            -H "X-Auth-Email: ${cf_email_saved}" -H "X-Auth-Key: ${cf_key_saved}" \
+                            -H "Content-Type: application/json" 2>/dev/null)"
                         if echo "$rules" | grep -q "az-wp-cache"; then
                             log_success "Cache rule 'az-wp-cache' is active."
                         else
@@ -1786,26 +1791,30 @@ This is a test message from az-wp security scanner."
                         ;;
                     2)
                         curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/${cf_zone}/purge_cache" \
-                            -H "Authorization: Bearer ${cf_token}" -H "Content-Type: application/json" \
+                            -H "X-Auth-Email: ${cf_email_saved}" -H "X-Auth-Key: ${cf_key_saved}" \
+                            -H "Content-Type: application/json" \
                             -d '{"purge_everything":true}' > /dev/null 2>&1
                         log_success "Cloudflare cache purged."
                         ;;
-                    3) cf_token="" ;; # fall through to setup
+                    3) cf_key_saved="" ;; # fall through to setup
                     *) return 0 ;;
                 esac
-                [[ -n "$cf_token" ]] && return 0
+                [[ -n "$cf_key_saved" ]] && return 0
             fi
 
-            printf "  ${BOLD}Setup Cloudflare Cache (auto HTML caching):${NC}\n\n"
-            printf "  ${BOLD}How to get API Token:${NC}\n"
+            printf "  ${BOLD}Easiest: Use Global API Key${NC}\n\n"
             printf "  1. Go to: https://dash.cloudflare.com/profile/api-tokens\n"
-            printf "  2. Create Token → Use template: ${BOLD}Edit zone DNS${NC}\n"
-            printf "     Or custom with permissions: Zone.Cache Purge + Zone.Cache Rules\n"
-            printf "  3. Zone: your domain\n"
-            printf "  4. Copy the token\n\n"
+            printf "  2. Scroll to ${BOLD}Global API Key${NC} → View → Copy\n"
+            printf "  3. You also need your Cloudflare login email\n\n"
 
-            read -rp "  Cloudflare API Token: " cf_token
-            [[ -z "$cf_token" ]] && { log_warn "Token required."; return 0; }
+            local cf_email cf_key
+            read -rp "  Cloudflare email: " cf_email
+            [[ -z "$cf_email" ]] && { log_warn "Email required."; return 0; }
+            read -rp "  Global API Key: " cf_key
+            [[ -z "$cf_key" ]] && { log_warn "API Key required."; return 0; }
+
+            # Build auth headers for Global API Key
+            local cf_auth="-H \"X-Auth-Email: ${cf_email}\" -H \"X-Auth-Key: ${cf_key}\""
 
             # Auto-detect Zone ID from domain
             log_sub "Detecting Zone ID for $DOMAIN..."
@@ -1813,50 +1822,40 @@ This is a test message from az-wp security scanner."
             root_domain="$(echo "$DOMAIN" | grep -oP '[^.]+\.[^.]+$')" || root_domain="$DOMAIN"
             local zone_response
             zone_response="$(curl -sf "https://api.cloudflare.com/client/v4/zones?name=${root_domain}" \
-                -H "Authorization: Bearer ${cf_token}" -H "Content-Type: application/json" 2>/dev/null)"
+                -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
+                -H "Content-Type: application/json" 2>/dev/null)"
 
             cf_zone="$(echo "$zone_response" | grep -oP '"id":"[a-f0-9]{32}"' | head -1 | cut -d'"' -f4)" || cf_zone=""
 
             if [[ -z "$cf_zone" ]]; then
-                log_error "Could not detect Zone ID. Check API Token permissions."
+                log_error "Could not detect Zone ID. Check email and API Key."
                 return 0
             fi
             log_success "Zone ID: $cf_zone"
 
-            # Create Cache Rule — cache everything for this hostname
+            # Create Cache Rule
             log_sub "Creating cache rule for $DOMAIN..."
-            local rule_payload
-            rule_payload="{
-                \"rules\": [{
-                    \"expression\": \"(http.host eq \\\"${DOMAIN}\\\")\",
-                    \"description\": \"az-wp-cache: Cache all content for ${DOMAIN}\",
-                    \"action\": \"set_cache_settings\",
-                    \"action_parameters\": {
-                        \"cache\": true,
-                        \"edge_ttl\": {\"mode\": \"override_origin\", \"default\": 86400},
-                        \"browser_ttl\": {\"mode\": \"override_origin\", \"default\": 600}
-                    }
-                }]
-            }"
-
             local rule_response
             rule_response="$(curl -sf -X PUT \
                 "https://api.cloudflare.com/client/v4/zones/${cf_zone}/rulesets/phases/http_request_cache_settings/entrypoint" \
-                -H "Authorization: Bearer ${cf_token}" -H "Content-Type: application/json" \
-                -d "$rule_payload" 2>/dev/null)"
+                -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
+                -H "Content-Type: application/json" \
+                -d "{\"rules\":[{\"expression\":\"(http.host eq \\\"${DOMAIN}\\\")\",\"description\":\"az-wp-cache: Cache all for ${DOMAIN}\",\"action\":\"set_cache_settings\",\"action_parameters\":{\"cache\":true,\"edge_ttl\":{\"mode\":\"override_origin\",\"default\":86400},\"browser_ttl\":{\"mode\":\"override_origin\",\"default\":600}}}]}" 2>/dev/null)" || true
 
             if echo "$rule_response" | grep -q '"success":true'; then
-                config_set "CF_API_TOKEN" "$cf_token"
+                config_set "CF_EMAIL" "$cf_email"
+                config_set "CF_API_KEY" "$cf_key"
                 config_set "CF_ZONE_ID" "$cf_zone"
                 log_success "Cloudflare cache rule created!"
                 printf "\n  ${GREEN}HTML pages now cached at Cloudflare edge (24h TTL)${NC}\n"
-                printf "  ${DIM}Browser: 10min cache. Edge: 24h cache.${NC}\n"
-                printf "  ${DIM}Purge: az-wp advanced cloudflare → Purge${NC}\n"
+                printf "  ${DIM}Browser: 10min. Edge: 24h. Purge: az-wp advanced cloudflare${NC}\n"
             else
                 local error_msg
                 error_msg="$(echo "$rule_response" | grep -oP '"message":"[^"]+' | head -1 | cut -d'"' -f4)" || error_msg="Unknown error"
                 log_error "Failed: $error_msg"
-                printf "  ${DIM}Token may need: Zone.Cache Purge + Zone Settings permissions${NC}\n"
+                printf "\n  ${DIM}If error persists, create the rule manually in Cloudflare Dashboard:${NC}\n"
+                printf "  ${DIM}Caching → Cache Rules → Create Rule${NC}\n"
+                printf "  ${DIM}When: hostname = %s → Cache eligible, Edge TTL 1 day${NC}\n" "$DOMAIN"
             fi
             ;;
 
