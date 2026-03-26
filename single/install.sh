@@ -615,7 +615,10 @@ main() {
     calculate_tune
     print_tune_summary
 
-    confirm "Press ENTER to start or Ctrl+C to abort" || die "Aborted by user."
+    # Skip confirmation if domain passed as argument (fully automated)
+    if [[ -z "$ARG_DOMAIN" ]]; then
+        confirm "Press ENTER to start or Ctrl+C to abort" || die "Aborted by user."
+    fi
 
     local start_time
     start_time="$(date +%s)"
