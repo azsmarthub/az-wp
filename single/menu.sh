@@ -1422,14 +1422,54 @@ _advanced_action() {
             local sec_sub="${2:-}"
             if [[ -z "$sec_sub" ]]; then
                 _header "Security"
-                printf "  1) Fail2Ban status\n"
-                printf "  2) Unban IP\n"
-                printf "  3) UFW status\n"
+                printf "  1) Run security scan (quick)\n"
+                printf "  2) Run full scan (checksums + malware)\n"
+                printf "  3) View scan logs\n"
+                printf "  4) Fail2Ban status\n"
+                printf "  5) Unban IP\n"
+                printf "  6) UFW status\n"
                 printf "  0) Back\n\n"
                 read -rp "  Choose: " sec_sub
-                case "$sec_sub" in 1) sec_sub="f2b-status" ;; 2) sec_sub="unban" ;; 3) sec_sub="ufw" ;; *) return 0 ;; esac
+                case "$sec_sub" in
+                    1) sec_sub="scan-daily" ;; 2) sec_sub="scan-weekly" ;;
+                    3) sec_sub="scan-logs" ;; 4) sec_sub="f2b-status" ;;
+                    5) sec_sub="unban" ;; 6) sec_sub="ufw" ;; *) return 0 ;;
+                esac
             fi
             case "$sec_sub" in
+                scan-daily|scan)
+                    if [[ -x /usr/local/bin/az-wp-security-scan ]]; then
+                        /usr/local/bin/az-wp-security-scan daily 2>&1
+                        local rc=$?
+                        local log_file="/var/log/az-wp/security/scan-$(date '+%Y-%m-%d').log"
+                        [[ -f "$log_file" ]] && printf "\n" && tail -20 "$log_file" | sed 's/^/  /'
+                        [[ $rc -eq 0 ]] && log_success "No issues found." || log_warn "$rc issue(s) found."
+                    else
+                        log_warn "Security scan not installed. Reinstall: bash /opt/az-wp/single/install.sh"
+                    fi
+                    ;;
+                scan-weekly|scan-full)
+                    if [[ -x /usr/local/bin/az-wp-security-scan ]]; then
+                        log_info "Running full scan (this may take 1-5 minutes)..."
+                        /usr/local/bin/az-wp-security-scan weekly 2>&1
+                        local rc=$?
+                        local log_file="/var/log/az-wp/security/scan-$(date '+%Y-%m-%d').log"
+                        [[ -f "$log_file" ]] && printf "\n" && tail -40 "$log_file" | sed 's/^/  /'
+                        [[ $rc -eq 0 ]] && log_success "No issues found." || log_warn "$rc issue(s) found."
+                    else
+                        log_warn "Security scan not installed."
+                    fi
+                    ;;
+                scan-logs)
+                    _header "Security Scan Logs"
+                    local log_dir="/var/log/az-wp/security"
+                    if [[ -d "$log_dir" ]]; then
+                        ls -lht "$log_dir"/*.log 2>/dev/null | head -10 | sed 's/^/  /'
+                        printf "\n  ${DIM}View latest: tail -50 %s/scan-$(date '+%%Y-%%m-%%d').log${NC}\n" "$log_dir"
+                    else
+                        printf "  No scan logs yet.\n"
+                    fi
+                    ;;
                 f2b-status) fail2ban-client status 2>/dev/null; for jail in $(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*://;s/,/ /g'); do printf "\n"; fail2ban-client status "$jail" 2>/dev/null; done ;;
                 unban) local ip; read -rp "  IP to unban: " ip; [[ -n "$ip" ]] && fail2ban-client unban "$ip" 2>/dev/null && log_success "Unbanned $ip" ;;
                 ufw) ufw status verbose 2>/dev/null ;;

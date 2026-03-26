@@ -468,6 +468,14 @@ step_security() {
     setup_ufw
     setup_fail2ban
     harden_all
+
+    # Security scanning (WP checksums + Wordfence CLI)
+    if [[ -f "$AZ_DIR/lib/wp-security.sh" ]]; then
+        source "$AZ_DIR/lib/wp-security.sh"
+        install_security_tools
+        create_scan_script "$SITE_USER" "$WEB_ROOT" "$DOMAIN"
+        setup_security_crons
+    fi
 }
 
 # ---------------------------------------------------------------------------
