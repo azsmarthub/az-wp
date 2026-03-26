@@ -331,15 +331,16 @@ menu_cache() {
     local sub="${1:-}"
     if [[ -z "$sub" ]]; then
         _header "Cache Management"
-        printf "  1) Purge all (FastCGI + Redis)\n"
+        printf "  1) Purge all (FastCGI + Redis + OPcache)\n"
         printf "  2) Purge FastCGI only\n"
         printf "  3) Purge Redis only\n"
-        printf "  4) Cache stats\n"
+        printf "  4) Purge OPcache (restart PHP-FPM)\n"
+        printf "  5) Cache stats\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
             1) sub="purge" ;; 2) sub="purge-fcgi" ;; 3) sub="purge-redis" ;;
-            4) sub="stats" ;; *) return 0 ;;
+            4) sub="purge-opcache" ;; 5) sub="stats" ;; *) return 0 ;;
         esac
     fi
 
@@ -347,7 +348,8 @@ menu_cache() {
         purge)
             rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
             redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
-            log_success "FastCGI + Redis cache purged."
+            systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
+            log_success "FastCGI + Redis + OPcache purged."
             ;;
         purge-fcgi)
             rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
@@ -357,6 +359,10 @@ menu_cache() {
             redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
             log_success "Redis cache purged."
             ;;
+        purge-opcache)
+            systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
+            log_success "OPcache purged (PHP-FPM restarted)."
+            ;;
         stats)
             local fcgi_size; fcgi_size="$(du -sh "$CACHE_PATH" 2>/dev/null | awk '{print $1}')" || fcgi_size="0"
             local fcgi_count; fcgi_count="$(find "$CACHE_PATH" -type f 2>/dev/null | wc -l)" || fcgi_count="0"
@@ -365,6 +371,7 @@ menu_cache() {
             _header "Cache Stats"
             printf "  FastCGI:  %s (%s files)\n" "$fcgi_size" "$fcgi_count"
             printf "  Redis:    %s (%s keys)\n" "$redis_mem" "$redis_keys"
+            printf "  OPcache:  ${DIM}(purge via option 4 or 'az-wp cache purge-opcache')${NC}\n"
             ;;
         *) log_warn "Unknown: $sub" ;;
     esac
@@ -1234,7 +1241,11 @@ menu_advanced() {
                         oc_mem="$(grep 'opcache.memory_consumption' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
                         oc_jit="$(grep 'opcache.jit_buffer_size' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
                         oc_files="$(grep 'opcache.max_accelerated_files' "$opcache_ini" | cut -d= -f2 | tr -d ' ')"
-                        printf "  Status:       %s\n" "$([[ "$oc_enabled" == "1" ]] && echo "${GREEN}ENABLED${NC}" || echo "${RED}DISABLED${NC}")"
+                        if [[ "$oc_enabled" == "1" ]]; then
+                            printf "  Status:       ${GREEN}ENABLED${NC}\n"
+                        else
+                            printf "  Status:       ${RED}DISABLED${NC}\n"
+                        fi
                         printf "  Memory:       %s MB\n" "${oc_mem:-0}"
                         printf "  Max files:    %s\n" "${oc_files:-0}"
                         printf "  JIT buffer:   %s\n" "${oc_jit:-0 (disabled)}"
