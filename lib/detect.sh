@@ -44,8 +44,12 @@ detect_hardware() {
         RAM_TIER="2g"
     elif [[ "$TOTAL_RAM_MB" -le 6144 ]]; then
         RAM_TIER="4g"
-    else
+    elif [[ "$TOTAL_RAM_MB" -le 12288 ]]; then
         RAM_TIER="8g"
+    elif [[ "$TOTAL_RAM_MB" -le 24576 ]]; then
+        RAM_TIER="16g"
+    else
+        RAM_TIER="32g"
     fi
 }
 

@@ -91,22 +91,56 @@ calculate_tune() {
             TUNE_NGINX_WORKER_CONNECTIONS=4096
             TUNE_MARIADB_MAX_CONNECTIONS=150
             ;;
-        8g|*)
+        8g)
             TUNE_SWAP_SIZE=2048
             TUNE_PHP_PM="dynamic"
-            TUNE_WEB_MAX_CHILDREN=35
+            TUNE_WEB_MAX_CHILDREN=40
             TUNE_WORKERS_ENABLED="true"
-            TUNE_WORKERS_MAX_CHILDREN=15
+            TUNE_WORKERS_MAX_CHILDREN=20
             TUNE_PHP_MEMORY_LIMIT="512M"
             TUNE_OPCACHE_MEMORY=256
             TUNE_JIT_BUFFER="128M"
-            TUNE_INNODB_BUFFER_POOL="3072M"
-            TUNE_INNODB_LOG_FILE_SIZE="768M"
-            TUNE_REDIS_MAXMEM="512mb"
+            TUNE_INNODB_BUFFER_POOL="4096M"
+            TUNE_INNODB_LOG_FILE_SIZE="1024M"
+            TUNE_REDIS_MAXMEM="1gb"
             TUNE_NGINX_WORKERS="auto"
             TUNE_NGINX_RLIMIT_NOFILE=65535
             TUNE_NGINX_WORKER_CONNECTIONS=4096
-            TUNE_MARIADB_MAX_CONNECTIONS=200
+            TUNE_MARIADB_MAX_CONNECTIONS=300
+            ;;
+        16g)
+            TUNE_SWAP_SIZE=2048
+            TUNE_PHP_PM="dynamic"
+            TUNE_WEB_MAX_CHILDREN=60
+            TUNE_WORKERS_ENABLED="true"
+            TUNE_WORKERS_MAX_CHILDREN=30
+            TUNE_PHP_MEMORY_LIMIT="512M"
+            TUNE_OPCACHE_MEMORY=256
+            TUNE_JIT_BUFFER="128M"
+            TUNE_INNODB_BUFFER_POOL="8192M"
+            TUNE_INNODB_LOG_FILE_SIZE="1024M"
+            TUNE_REDIS_MAXMEM="2gb"
+            TUNE_NGINX_WORKERS="auto"
+            TUNE_NGINX_RLIMIT_NOFILE=65535
+            TUNE_NGINX_WORKER_CONNECTIONS=4096
+            TUNE_MARIADB_MAX_CONNECTIONS=400
+            ;;
+        32g|*)
+            TUNE_SWAP_SIZE=2048
+            TUNE_PHP_PM="dynamic"
+            TUNE_WEB_MAX_CHILDREN=80
+            TUNE_WORKERS_ENABLED="true"
+            TUNE_WORKERS_MAX_CHILDREN=40
+            TUNE_PHP_MEMORY_LIMIT="512M"
+            TUNE_OPCACHE_MEMORY=256
+            TUNE_JIT_BUFFER="128M"
+            TUNE_INNODB_BUFFER_POOL="16384M"
+            TUNE_INNODB_LOG_FILE_SIZE="1024M"
+            TUNE_REDIS_MAXMEM="4gb"
+            TUNE_NGINX_WORKERS="auto"
+            TUNE_NGINX_RLIMIT_NOFILE=65535
+            TUNE_NGINX_WORKER_CONNECTIONS=4096
+            TUNE_MARIADB_MAX_CONNECTIONS=500
             ;;
     esac
 
@@ -199,7 +233,7 @@ calculate_tune() {
             TUNE_MARIADB_TABLE_CACHE=4000
             TUNE_MARIADB_TABLE_DEF_CACHE=2000
             ;;
-        8g|*)
+        8g)
             TUNE_INNODB_POOL_INSTANCES=8
             TUNE_INNODB_LOG_BUFFER="64M"
             TUNE_INNODB_IO_CAPACITY=2000
@@ -209,6 +243,28 @@ calculate_tune() {
             TUNE_MARIADB_TMP_TABLE="256M"
             TUNE_MARIADB_TABLE_CACHE=8000
             TUNE_MARIADB_TABLE_DEF_CACHE=4000
+            ;;
+        16g)
+            TUNE_INNODB_POOL_INSTANCES=8
+            TUNE_INNODB_LOG_BUFFER="64M"
+            TUNE_INNODB_IO_CAPACITY=3000
+            TUNE_INNODB_IO_CAPACITY_MAX=6000
+            TUNE_INNODB_IO_THREADS=8
+            TUNE_MARIADB_THREAD_CACHE=150
+            TUNE_MARIADB_TMP_TABLE="512M"
+            TUNE_MARIADB_TABLE_CACHE=8000
+            TUNE_MARIADB_TABLE_DEF_CACHE=4000
+            ;;
+        32g|*)
+            TUNE_INNODB_POOL_INSTANCES=8
+            TUNE_INNODB_LOG_BUFFER="128M"
+            TUNE_INNODB_IO_CAPACITY=4000
+            TUNE_INNODB_IO_CAPACITY_MAX=8000
+            TUNE_INNODB_IO_THREADS=8
+            TUNE_MARIADB_THREAD_CACHE=200
+            TUNE_MARIADB_TMP_TABLE="1024M"
+            TUNE_MARIADB_TABLE_CACHE=16000
+            TUNE_MARIADB_TABLE_DEF_CACHE=8000
             ;;
     esac
 
