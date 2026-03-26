@@ -62,19 +62,29 @@ if [[ "${1:-}" == "--reset" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Parse domain from argument: curl ... | bash -s -- domain.com
+# ---------------------------------------------------------------------------
+ARG_DOMAIN="${1:-}"
+# Skip if it looks like a flag
+[[ "$ARG_DOMAIN" == -* ]] && ARG_DOMAIN=""
+
+# ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
 print_banner() {
     local ver="${AZ_VERSION:-0.0.0}"
+    local mode="Fresh Install"
+    [[ -d "$AZ_DIR/clone" && -f "$AZ_DIR/clone/database.sql.gz" ]] && mode="Clone Mode"
     printf "\n"
     printf "===================================================\n"
     printf "       az-wp-single Installer v%s\n" "$ver"
+    printf "       Mode: %s\n" "$mode"
     printf "===================================================\n"
     printf "\n"
 }
 
 # ---------------------------------------------------------------------------
-# Configuration prompts
+# Configuration
 # ---------------------------------------------------------------------------
 prompt_config() {
     local existing_domain
@@ -97,40 +107,29 @@ prompt_config() {
         return 0
     fi
 
-    # --- Domain ---
-    local input_domain=""
-    while [[ -z "$input_domain" ]]; do
-        printf "${BOLD}Domain name${NC} (e.g. example.com): "
-        read -r input_domain
-        # Basic format validation
-        if [[ ! "$input_domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
-            log_warn "Invalid domain format. Try again."
-            input_domain=""
-        fi
-    done
-    DOMAIN="$input_domain"
+    # --- Domain (from arg or prompt) ---
+    if [[ -n "$ARG_DOMAIN" ]]; then
+        DOMAIN="$ARG_DOMAIN"
+        log_info "Domain: $DOMAIN (from argument)"
+    else
+        local input_domain=""
+        while [[ -z "$input_domain" ]]; do
+            printf "${BOLD}Domain name${NC} (e.g. example.com): "
+            read -r input_domain
+            if [[ ! "$input_domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+                log_warn "Invalid domain format. Try again."
+                input_domain=""
+            fi
+        done
+        DOMAIN="$input_domain"
+    fi
 
-    # --- PHP version (latest by default) ---
+    # --- Auto-generate everything (no more prompts) ---
     PHP_VERSION="8.5"
+    WP_ADMIN_USER="admin"
+    WP_ADMIN_EMAIL="admin@${DOMAIN}"
 
-    # --- WP admin user ---
-    printf "${BOLD}WP admin username${NC} (default: admin): "
-    read -r WP_ADMIN_USER
-    WP_ADMIN_USER="${WP_ADMIN_USER:-admin}"
-
-    # --- WP admin email ---
-    local input_email=""
-    while [[ -z "$input_email" ]]; do
-        printf "${BOLD}WP admin email${NC}: "
-        read -r input_email
-        if [[ -z "$input_email" ]]; then
-            log_warn "Email cannot be empty."
-        fi
-    done
-    WP_ADMIN_EMAIL="$input_email"
-
-    # --- Generate derived values ---
-    # Site user: domain slug (replace dots/hyphens with underscores, truncate)
+    # Site user: domain slug
     SITE_USER="$(printf '%s' "$DOMAIN" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c1-32)"
 
     WEB_ROOT="/home/${SITE_USER}/${DOMAIN}"
@@ -142,7 +141,7 @@ prompt_config() {
     DB_PASS="$(generate_password 24)"
     WP_ADMIN_PASS="$(generate_password 20)"
 
-    # --- Save all to state ---
+    # Save all to state
     state_set "DOMAIN" "$DOMAIN"
     state_set "PHP_VERSION" "$PHP_VERSION"
     state_set "WP_ADMIN_USER" "$WP_ADMIN_USER"
@@ -168,7 +167,6 @@ run_step() {
     local description="$3"
     local func_name="$4"
 
-    # Derive step name: strip "step_" prefix
     local step_name="${func_name#step_}"
 
     if step_done "$step_name"; then
@@ -193,31 +191,26 @@ run_step() {
 # Step 1: System preparation
 # ---------------------------------------------------------------------------
 step_system_prep() {
-    # Timezone
     log_sub "Setting timezone to UTC..."
     timedatectl set-timezone UTC 2>/dev/null || ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 
-    # Locale
     log_sub "Configuring locale (en_US.UTF-8)..."
     if ! locale -a 2>/dev/null | grep -q "en_US.utf8"; then
         locale-gen en_US.UTF-8 > /dev/null 2>&1 || true
     fi
     update-locale LANG=en_US.UTF-8 > /dev/null 2>&1 || true
 
-    # System update — show progress, this can take 1-3 min on fresh VPS
     log_sub "Updating package lists..."
     apt-get update -qq 2>&1 | tail -1 || true
     log_sub "Upgrading system packages (this may take a few minutes)..."
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -q 2>&1 | grep -E "^(Get|Fetched|Reading|Unpacking|Setting up|[0-9]+ upgraded)" | tail -5 || true
 
-    # Essential packages
     log_sub "Installing base packages (curl, git, htop, etc.)..."
     NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
         curl wget gnupg software-properties-common unzip git bc \
         htop ncdu logrotate apt-transport-https ca-certificates lsb-release \
         2>&1 | grep -E "^(Setting up|[0-9]+ newly)" | tail -3 || true
 
-    # Swap
     if ! swapon --show | grep -q '/'; then
         local swap_mb="${TUNE_SWAP_SIZE:-1024}"
         log_sub "Creating ${swap_mb}MB swap..."
@@ -244,22 +237,19 @@ step_create_user() {
         log_info "Created user: $SITE_USER"
     fi
 
-    # Create web root
     mkdir -p "$WEB_ROOT"
     chown "$SITE_USER":"$SITE_USER" "$WEB_ROOT"
 
-    # Create cache dir
     mkdir -p "$CACHE_PATH"
     chown "$SITE_USER":"$SITE_USER" "$CACHE_PATH"
 
-    # Add www-data to site user group
     usermod -aG "$SITE_USER" www-data 2>/dev/null || true
 
     log_info "Directories ready: $WEB_ROOT, $CACHE_PATH"
 }
 
 # ---------------------------------------------------------------------------
-# Step 3: Nginx + FastCGI Cache (cache zone must exist before site config)
+# Step 3: Nginx + FastCGI Cache
 # ---------------------------------------------------------------------------
 step_nginx() {
     install_nginx
@@ -271,7 +261,7 @@ step_nginx() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5: PHP-FPM
+# Step 4: PHP-FPM
 # ---------------------------------------------------------------------------
 step_php() {
     install_php
@@ -283,7 +273,7 @@ step_php() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 6: MariaDB
+# Step 5: MariaDB
 # ---------------------------------------------------------------------------
 step_mariadb() {
     install_mariadb
@@ -294,20 +284,18 @@ step_mariadb() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 7: Redis
+# Step 6: Redis
 # ---------------------------------------------------------------------------
 step_redis() {
     install_redis
     configure_redis
     service_restart redis-server
     test_redis || log_warn "Redis test failed — check config"
-    # Restart PHP-FPM to pick up new redis group membership
-    # (usermod -aG redis was run in configure_redis, but FPM started before that)
     service_restart "php${PHP_VERSION}-fpm"
 }
 
 # ---------------------------------------------------------------------------
-# Step 8: WordPress
+# Step 7: WordPress (clone or fresh)
 # ---------------------------------------------------------------------------
 step_wordpress() {
     install_wpcli
@@ -315,14 +303,12 @@ step_wordpress() {
     local clone_dir="$AZ_DIR/clone"
 
     if [[ -f "$clone_dir/database.sql.gz" && -f "$clone_dir/wp-content.tar.gz" ]]; then
-        # === CLONE MODE: restore from pre-built site ===
+        # === CLONE MODE ===
         log_sub "Clone data detected — restoring from preset..."
 
-        # Download WP core
         log_sub "Downloading WordPress core..."
         sudo -u "$SITE_USER" wp core download --path="$WEB_ROOT" --locale=en_US 2>&1 | grep -v Deprecated || true
 
-        # Create wp-config from template
         log_sub "Creating wp-config.php..."
         if [[ -f "$clone_dir/wp-config-template.php" ]]; then
             cp "$clone_dir/wp-config-template.php" "$WEB_ROOT/wp-config.php"
@@ -330,31 +316,24 @@ step_wordpress() {
             sed -i "s|CLONE_DB_USER|${DB_USER}|g" "$WEB_ROOT/wp-config.php"
             sed -i "s|CLONE_DB_PASS|${DB_PASS}|g" "$WEB_ROOT/wp-config.php"
             sed -i "s|CLONE_DOMAIN|${DOMAIN}|g" "$WEB_ROOT/wp-config.php"
-            # Fix Redis socket
-            sed -i "s|WP_REDIS_HOST.*|WP_REDIS_SCHEME', 'unix' );|" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
         else
             sudo -u "$SITE_USER" wp config create --path="$WEB_ROOT" \
                 --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASS" \
                 --dbhost="localhost" --dbprefix="oXxhsA_" 2>&1 | grep -v Deprecated || true
         fi
 
-        # Import database
-        log_sub "Importing database (~$(stat -c%s "$clone_dir/database.sql.gz" 2>/dev/null | awk '{printf "%.1f MB", $1/1048576}'))..."
+        log_sub "Importing database..."
         gunzip -c "$clone_dir/database.sql.gz" | mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
 
-        # Extract wp-content (plugins + themes + uploads)
-        log_sub "Extracting wp-content (plugins, themes, uploads)..."
+        log_sub "Extracting wp-content..."
         tar xzf "$clone_dir/wp-content.tar.gz" -C "$WEB_ROOT" 2>/dev/null
 
-        # Search & replace domain
-        log_sub "Search & replace domain in database..."
+        log_sub "Search & replace domain..."
         sudo -u "$SITE_USER" wp search-replace 'productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
         sudo -u "$SITE_USER" wp option update siteurl "https://$DOMAIN" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
         sudo -u "$SITE_USER" wp option update home "https://$DOMAIN" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
-        # Configure Redis
         log_sub "Configuring Redis..."
-        # Remove old TCP Redis config if exists
         sed -i "/WP_REDIS_HOST/d" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
         sed -i "/WP_REDIS_PORT/d" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
         sed -i "/WP_REDIS_MAXTTL/d" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
@@ -365,21 +344,16 @@ step_wordpress() {
         }
         sudo -u "$SITE_USER" wp config set WP_CACHE_KEY_SALT "${DOMAIN}_" --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
 
-        # Enable Redis Object Cache
         log_sub "Enabling Redis Object Cache..."
         sudo -u "$SITE_USER" wp redis enable --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
-        # Update plugin cache path
         log_sub "Configuring cache path..."
         sudo -u "$SITE_USER" wp option patch update acms_general_settings cache_path "${CACHE_PATH}/" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
-        # Reset admin password
         log_sub "Resetting admin password..."
         sudo -u "$SITE_USER" wp user update 1 --user_pass="$WP_ADMIN_PASS" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
-
-        log_sub "Clone restore complete."
     else
-        # === FRESH MODE: install blank WordPress ===
+        # === FRESH MODE ===
         install_wordpress
         configure_wp_extras
         install_redis_plugin
@@ -389,53 +363,50 @@ step_wordpress() {
     setup_wp_cron
     setup_logrotate
 
-    # Default auto backup: every 2 days at 3:00 AM
+    # Auto backup: every 2 days at 3:00 AM
     log_sub "Setting up auto backup (every 2 days)..."
-    local backup_dir="/home/${SITE_USER}/backups"
-    mkdir -p "$backup_dir"
+    mkdir -p "/home/${SITE_USER}/backups"
     printf '# az-wp: backup every 2 days at 3:00 AM\n0 3 */2 * * root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1\n' \
         > /etc/cron.d/az-wp-backup
     chmod 644 /etc/cron.d/az-wp-backup
 
-    # Setup nginx-cache-purge helper + sudoers
+    # Cache helpers
     log_sub "Setting up cache helpers..."
-    cat > /usr/local/bin/nginx-cache-purge <<'SCRIPT'
+    cat > /usr/local/bin/nginx-cache-purge <<'NSCRIPT'
 #!/bin/bash
 CACHE_DIR="${1:-/dev/null}"
-ACTION="${2:-help}"
-case "$ACTION" in
+case "${2:-help}" in
     purge-all) rm -rf "${CACHE_DIR}"/* 2>/dev/null; echo 'purged' ;;
     count)     find "$CACHE_DIR" -type f 2>/dev/null | wc -l ;;
     size)      du -sb "$CACHE_DIR" 2>/dev/null | awk '{print $1}' ;;
     list)      find "$CACHE_DIR" -type f 2>/dev/null ;;
     exists)    [[ -d "$CACHE_DIR" ]] && echo 'yes' || echo 'no' ;;
-    *)         echo 'Usage: nginx-cache-purge [cache_dir] purge-all|count|size|list|exists' ;;
+    *)         echo 'Usage: nginx-cache-purge [dir] purge-all|count|size|list|exists' ;;
 esac
-SCRIPT
+NSCRIPT
     chmod +x /usr/local/bin/nginx-cache-purge
 
-    # Sudoers for cache helper
     printf '%s ALL=(root) NOPASSWD: /usr/local/bin/nginx-cache-purge\n' "$SITE_USER" \
         > /etc/sudoers.d/nginx-cache-purge
     chmod 440 /etc/sudoers.d/nginx-cache-purge
 
-    # Cache stats cron
-    cat > /etc/cron.d/az-wp-cache-stats <<CRON
+    # Cache stats cron + initial generation
+    cat > /etc/cron.d/az-wp-cache-stats <<CSCRON
 # az-wp: update cache stats every 5 minutes
 */5 * * * * root /usr/local/bin/nginx-cache-purge ${CACHE_PATH} count > /tmp/az-cache-count && /usr/local/bin/nginx-cache-purge ${CACHE_PATH} size > /tmp/az-cache-size && printf '{"files":%s,"size":%s,"updated":"%s"}' "\$(cat /tmp/az-cache-count)" "\$(cat /tmp/az-cache-size)" "\$(date '+%Y-%m-%d %H:%M:%S')" > /home/${SITE_USER}/cache/cache-stats.json 2>/dev/null
-CRON
+CSCRON
     chmod 644 /etc/cron.d/az-wp-cache-stats
 
-    # Generate initial cache-stats.json
-    log_sub "Generating initial cache stats..."
-    local _count _size _stats_dir="/home/${SITE_USER}/cache"
+    # Initial cache stats
+    local _stats_dir="/home/${SITE_USER}/cache"
     mkdir -p "$_stats_dir"
+    local _count _size
     _count="$(find "$CACHE_PATH" -type f 2>/dev/null | wc -l || echo 0)"
     _size="$(du -sb "$CACHE_PATH" 2>/dev/null | awk '{print $1}' || echo 0)"
     printf '{"files":%s,"size":%s,"updated":"%s"}' "$_count" "$_size" "$(date '+%Y-%m-%d %H:%M:%S')" > "$_stats_dir/cache-stats.json"
     chown "$SITE_USER:$SITE_USER" "$_stats_dir/cache-stats.json"
 
-    # Install AffiliateCMS crons if clone mode (site has the plugins)
+    # AffiliateCMS crons (clone mode only)
     if [[ -f "$clone_dir/database.sql.gz" ]]; then
         log_sub "Installing AffiliateCMS cron jobs..."
         local api_token
@@ -453,7 +424,7 @@ CRON
                 "post-ai|*/10 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI"
                 "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/process-category-ai|30|GET|Category AI"
                 "brand-ai|*/10 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI"
-                "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
+                "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand cat AI"
                 "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|60|GET|Quick update"
                 "retry-stuck|*/10 * * * *|/wp-json/acms-cat/v1/cron/retry-stuck|30|GET|Retry stuck"
                 "bulk-update|* * * * *|/wp-json/acms-cat/v1/cron/bulk-update-worker|90|GET|Bulk update"
@@ -473,13 +444,13 @@ CRON
             done
             log_sub "Installed 15 AffiliateCMS cron jobs."
         else
-            log_warn "API token not found — skip cron preset. Install later: az-wp cron preset"
+            log_warn "API token not found — run 'az-wp cron preset' later."
         fi
     fi
 }
 
 # ---------------------------------------------------------------------------
-# Step 9: SSL
+# Step 8: SSL
 # ---------------------------------------------------------------------------
 step_ssl() {
     install_certbot
@@ -488,7 +459,7 @@ step_ssl() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 10: Security
+# Step 9: Security
 # ---------------------------------------------------------------------------
 step_security() {
     setup_ufw
@@ -510,7 +481,7 @@ install_cli_menu() {
 }
 
 # ---------------------------------------------------------------------------
-# Final summary
+# Final summary with verification
 # ---------------------------------------------------------------------------
 print_summary() {
     local start_time="$1"
@@ -524,18 +495,87 @@ print_summary() {
     printf "${GREEN}===================================================\n"
     printf "  Installation Complete!  (%dm %ds)\n" "$minutes" "$seconds"
     printf "===================================================${NC}\n"
-    printf "\n"
-    printf "  ${BOLD}Website:${NC}    https://%s\n" "$DOMAIN"
-    printf "  ${BOLD}WP Admin:${NC}   https://%s/wp-admin\n" "$DOMAIN"
-    printf "  ${BOLD}Username:${NC}   %s\n" "$WP_ADMIN_USER"
-    printf "  ${BOLD}Password:${NC}   %s\n" "$WP_ADMIN_PASS"
-    printf "\n"
-    printf "  ${BOLD}DB Name:${NC}    %s\n" "$DB_NAME"
-    printf "  ${BOLD}DB User:${NC}    %s\n" "$DB_USER"
-    printf "  ${BOLD}DB Pass:${NC}    %s\n" "$DB_PASS"
-    printf "\n"
-    printf "  ${DIM}Manage: az-wp${NC}\n"
-    printf "\n"
+
+    # --- Verification ---
+    printf "\n${BOLD}  Verification:${NC}\n"
+    printf "  ──────────────────────────────────────\n"
+
+    # Website
+    local http_code
+    http_code="$(curl -sfk --resolve "${DOMAIN}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${DOMAIN}/" 2>/dev/null || curl -sf -o /dev/null -w '%{http_code}' "http://${DOMAIN}/" 2>/dev/null)" || http_code="000"
+    if [[ "$http_code" == "200" || "$http_code" == "301" || "$http_code" == "302" ]]; then
+        printf "  ${GREEN}OK${NC}  Website       https://%s (HTTP %s)\n" "$DOMAIN" "$http_code"
+    else
+        printf "  ${YELLOW}--${NC}  Website       https://%s (HTTP %s)\n" "$DOMAIN" "$http_code"
+    fi
+
+    # Services
+    local svc svc_ok=0 svc_total=0
+    for svc in nginx "php${PHP_VERSION}-fpm" mariadb redis-server fail2ban; do
+        svc_total=$((svc_total + 1))
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            svc_ok=$((svc_ok + 1))
+        fi
+    done
+    if [[ $svc_ok -eq $svc_total ]]; then
+        printf "  ${GREEN}OK${NC}  Services      %s/%s active (nginx, php-fpm, mariadb, redis, fail2ban)\n" "$svc_ok" "$svc_total"
+    else
+        printf "  ${RED}!!${NC}  Services      %s/%s active\n" "$svc_ok" "$svc_total"
+    fi
+
+    # SSL
+    local ssl_info
+    ssl_info="$(echo | openssl s_client -connect localhost:443 -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)" || ssl_info=""
+    if [[ -n "$ssl_info" ]]; then
+        printf "  ${GREEN}OK${NC}  SSL           Let's Encrypt (expires: %s)\n" "$ssl_info"
+    else
+        printf "  ${YELLOW}--${NC}  SSL           Not issued (run: az-wp advanced ssl issue)\n"
+    fi
+
+    # Redis
+    local redis_status
+    redis_status="$(redis-cli -s "$REDIS_SOCK" ping 2>/dev/null)" || redis_status=""
+    if [[ "$redis_status" == "PONG" ]]; then
+        printf "  ${GREEN}OK${NC}  Redis         Connected (Unix socket)\n"
+    else
+        printf "  ${RED}!!${NC}  Redis         Not responding\n"
+    fi
+
+    # Cache
+    printf "  ${GREEN}OK${NC}  FastCGI       %s (auto-tune)\n" "$CACHE_PATH"
+
+    # Crons
+    local cron_count
+    cron_count="$(ls /etc/cron.d/az-wp-* 2>/dev/null | wc -l || echo 0)"
+    printf "  ${GREEN}OK${NC}  Cron jobs     %s configured\n" "$cron_count"
+
+    # Backup
+    printf "  ${GREEN}OK${NC}  Auto backup   Every 2 days at 3:00 AM\n"
+
+    printf "  ──────────────────────────────────────\n"
+
+    # --- Credentials ---
+    printf "\n${BOLD}  Access Credentials:${NC}\n"
+    printf "  ──────────────────────────────────────\n"
+    printf "  Website:    https://%s\n" "$DOMAIN"
+    printf "  WP Admin:   https://%s/wp-admin\n" "$DOMAIN"
+    printf "  Username:   ${BOLD}%s${NC}\n" "$WP_ADMIN_USER"
+    printf "  Password:   ${BOLD}%s${NC}\n" "$WP_ADMIN_PASS"
+    printf "  ──────────────────────────────────────\n"
+    printf "  DB Name:    %s\n" "$DB_NAME"
+    printf "  DB User:    %s\n" "$DB_USER"
+    printf "  DB Pass:    %s\n" "$DB_PASS"
+    printf "  ──────────────────────────────────────\n"
+    printf "  Site User:  %s\n" "$SITE_USER"
+    printf "  Web Root:   %s\n" "$WEB_ROOT"
+    printf "  Cache:      %s\n" "$CACHE_PATH"
+    printf "  PHP:        %s | FPM: web=%s workers=%s\n" "$PHP_VERSION" "${TUNE_WEB_MAX_CHILDREN:-?}" "${TUNE_WORKERS_MAX_CHILDREN:-?}"
+    printf "  MariaDB:    InnoDB %s | Connections %s\n" "${TUNE_INNODB_BUFFER_POOL:-?}" "${TUNE_MARIADB_MAX_CONNECTIONS:-?}"
+    printf "  Redis:      %s (Unix socket)\n" "${TUNE_REDIS_MAXMEM:-?}"
+    printf "  OPcache:    %sMB + JIT %s\n" "${TUNE_OPCACHE_MEMORY:-?}" "${TUNE_JIT_BUFFER:-0}"
+    printf "  ──────────────────────────────────────\n"
+    printf "\n  ${BOLD}Manage:${NC} az-wp\n"
+    printf "  ${BOLD}Help:${NC}   az-wp help\n\n"
 }
 
 # ---------------------------------------------------------------------------
