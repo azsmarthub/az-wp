@@ -24,7 +24,8 @@ install_security_tools() {
             log_warn "Wordfence CLI install failed (optional — scan will use checksums only)"
         # Accept Wordfence free license non-interactively
         if command -v wordfence >/dev/null 2>&1; then
-            echo "y" | wordfence configure --accept-terms > /dev/null 2>&1 || true
+            wordfence configure --default --accept-terms > /dev/null 2>&1 || true
+            log_sub "Wordfence CLI configured (free license)"
         fi
     else
         log_warn "pip3 not available — Wordfence CLI skipped"
@@ -149,10 +150,11 @@ case "${1:-daily}" in
 
         # --- Tier 2: WP Doctor health check ---
         log "--- Tier 2: WP Doctor ---"
-        if sudo -u "$SITE_USER" wp doctor check --path="$WEB_ROOT" 2>&1 | grep -v Deprecated > "$LOG_DIR/doctor-${DATE}.log" 2>&1; then
+        if sudo -u "$SITE_USER" wp doctor check --all --path="$WEB_ROOT" 2>&1 | grep -v Deprecated > "$LOG_DIR/doctor-${DATE}.log" 2>&1; then
             log "WP Doctor: all checks passed"
         else
-            doctor_issues=$(grep -c "Error\|Warning" "$LOG_DIR/doctor-${DATE}.log" 2>/dev/null || echo "0")
+            doctor_issues=$(grep -c "^Error\|Warning\|error" "$LOG_DIR/doctor-${DATE}.log" 2>/dev/null | tr -d '[:space:]')
+            doctor_issues="${doctor_issues:-0}"
             if [[ "$doctor_issues" -gt 0 ]]; then
                 alert "WP Doctor found $doctor_issues issues. See: $LOG_DIR/doctor-${DATE}.log"
             fi
@@ -173,8 +175,8 @@ case "${1:-daily}" in
         log "--- Tier 3: Wordfence Malware Scan ---"
         if command -v wordfence >/dev/null 2>&1; then
             # Check if Wordfence is configured (requires license acceptance)
-            # Accept license non-interactively, then scan
-            echo "n" | wordfence configure >/dev/null 2>&1 || true
+            # Ensure configured, then scan
+            wordfence configure --default --accept-terms >/dev/null 2>&1 || true
             if wordfence malware-scan "$WEB_ROOT" \
                     --output-path "$LOG_DIR/wordfence-${DATE}.txt" \
                     --accept-terms 2>> "$LOG_FILE"; then
