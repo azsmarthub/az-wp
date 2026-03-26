@@ -159,11 +159,13 @@ server {
         fastcgi_cache_use_stale error timeout updating;
         fastcgi_cache_lock on;
         fastcgi_cache_lock_timeout 5s;
-        add_header X-FastCGI-Cache $upstream_cache_status;
+        add_header X-FastCGI-Cache $upstream_cache_status always;
 
-        # Standard cache headers (for WordPress Health Check detection)
-        add_header Cache-Control "public, max-age=86400" always;
+        # Browser caching for HTML pages (cache 10min, revalidate after)
+        add_header Cache-Control "public, max-age=600, stale-while-revalidate=86400" always;
         add_header X-Cache-Enabled "true" always;
+        add_header Vary "Accept-Encoding, Cookie" always;
+        etag on;
     }
 
     # Rate limit wp-login.php
@@ -187,10 +189,23 @@ server {
         deny all;
     }
 
-    # Static assets - browser cache 1 year
-    location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg|webp|woff2|woff|ttf|eot|mp4|mp3|pdf)$ {
+    # Static assets - browser cache 1 year (CSS, JS, fonts, images)
+    location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg|webp|avif|woff2|woff|ttf|eot|mp4|mp3|pdf)$ {
         expires 365d;
-        add_header Cache-Control "public, immutable";
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Vary "Accept-Encoding" always;
         access_log off;
+        etag on;
+
+        # Enable gzip for text-based assets
+        gzip_static on;
+    }
+
+    # WordPress uploaded media — cache but allow re-validation
+    location ~* /wp-content/uploads/ {
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000" always;
+        access_log off;
+        etag on;
     }
 }

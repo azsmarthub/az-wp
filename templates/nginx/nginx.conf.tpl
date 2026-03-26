@@ -14,9 +14,19 @@ http {
     tcp_nopush on;
     tcp_nodelay on;
     keepalive_timeout 65;
+    keepalive_requests 1000;
     types_hash_max_size 2048;
     server_tokens off;
     client_max_body_size 256m;
+
+    # Enable ETag for static file validation
+    etag on;
+
+    # Open file cache — reduce disk I/O for repeated static file requests
+    open_file_cache max=10000 inactive=60s;
+    open_file_cache_valid 120s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors on;
 
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
