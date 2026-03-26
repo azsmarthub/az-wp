@@ -1527,15 +1527,19 @@ _advanced_action() {
 
                     printf "\n  ${BOLD}Step 2:${NC} Send a message to your bot\n"
                     printf "  → Open Telegram, search ${BOLD}@${bot_name}${NC}\n"
-                    printf "  → Send any message (e.g. \"hello\")\n"
+                    printf "  → Press ${BOLD}Start${NC} button, then send \"hello\"\n"
                     printf "  → Then press ENTER here\n\n"
                     read -rp "  Press ENTER after sending message to bot..." _
 
-                    # Auto-detect Chat ID from getUpdates
-                    local updates
-                    updates="$(curl -sf "https://api.telegram.org/bot${new_token}/getUpdates" 2>/dev/null)"
-                    local new_chat
-                    new_chat="$(echo "$updates" | grep -oP '"chat":\{"id":(-?[0-9]+)' | head -1 | grep -oP '(-?[0-9]+)$')" || new_chat=""
+                    # Auto-detect Chat ID — retry up to 5 times (message may take a moment)
+                    local new_chat="" updates="" retry
+                    for retry in 1 2 3 4 5; do
+                        updates="$(curl -sf "https://api.telegram.org/bot${new_token}/getUpdates" 2>/dev/null)"
+                        new_chat="$(echo "$updates" | grep -oP '"chat":\{"id":(-?[0-9]+)' | head -1 | grep -oP '(-?[0-9]+)$')" || new_chat=""
+                        [[ -n "$new_chat" ]] && break
+                        printf "  ${DIM}Waiting for message... (%s/5)${NC}\n" "$retry"
+                        sleep 3
+                    done
 
                     if [[ -z "$new_chat" ]]; then
                         log_warn "Could not detect Chat ID. Make sure you sent a message to @${bot_name}"
