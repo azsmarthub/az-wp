@@ -471,6 +471,34 @@ CSCRON
             log_warn "API token not found — run 'azwp cron preset' later."
         fi
     fi
+
+    # Pre-install phpMyAdmin + FPM pool (not enabled until user runs 'azwp db pma')
+    if [[ ! -d /usr/share/phpmyadmin ]]; then
+        log_sub "Pre-installing phpMyAdmin..."
+        apt_install phpmyadmin
+    fi
+    local pma_pool="/etc/php/${PHP_VERSION}/fpm/pool.d/phpmyadmin.conf"
+    if [[ ! -f "$pma_pool" ]]; then
+        cat > "$pma_pool" <<FPMPOOL
+[phpmyadmin]
+user = www-data
+group = www-data
+listen = /run/php/php${PHP_VERSION}-fpm-pma.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 2
+pm.process_idle_timeout = 60s
+request_terminate_timeout = 300
+php_admin_value[open_basedir] = /usr/share/phpmyadmin:/tmp:/var/lib/phpmyadmin:/etc/phpmyadmin:/usr/share/php
+php_admin_value[upload_max_filesize] = 256M
+php_admin_value[post_max_size] = 256M
+php_admin_value[max_execution_time] = 300
+FPMPOOL
+        systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null || true
+    fi
+    log_sub "phpMyAdmin ready (run 'azwp db pma' to activate)."
 }
 
 # ---------------------------------------------------------------------------
