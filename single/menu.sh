@@ -1055,22 +1055,27 @@ _cron_install_preset() {
     local url="https://${DOMAIN}"
 
     # All preset crons: name|schedule|endpoint|max_time|method|description
+    # Tier 1: Pipeline (critical path — every 2 min)
+    # Tier 2: AI Generation (every 5 min)
+    # Tier 3: Maintenance (background — less frequent)
     local presets=(
-        "scrape|*/5 * * * *|/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
-        "scrape-monitor|*/5 * * * *|/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor"
-        "queue-processor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Category queue processor"
-        "queue-monitor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Category queue monitor"
-        "product-ai|*/10 * * * *|/wp-json/acms/v1/cron/product-ai|30|GET|Product AI generation"
-        "post-ai|*/10 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI generation"
-        "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/category-ai|60|GET|Category AI"
-        "brand-ai|*/10 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI generation"
-        "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
-        "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|60|GET|Quick price update"
-        "retry-stuck|*/10 * * * *|/wp-json/acms-cat/v1/cron/retry-stuck|30|GET|Retry stuck jobs"
+        "scrape|*/2 * * * *|/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
+        "process-scheduled|*/2 * * * *|/wp-json/acms/v1/automation/process-scheduled|30|GET|Process scheduled"
+        "scrape-monitor|*/2 * * * *|/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor"
+        "queue-processor|*/2 * * * *|/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Queue processor"
+        "queue-monitor|*/2 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Queue monitor"
+        "product-ai|*/5 * * * *|/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
+        "post-ai|*/5 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI"
+        "category-ai|*/5 * * * *|/wp-json/acms-cat/v1/cron/category-ai|60|GET|Category AI"
+        "brand-ai|*/5 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI"
+        "brand-category-ai|*/5 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
+        "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|60|GET|Quick update"
+        "retry-stuck|*/10 * * * *|/wp-json/acms-cat/v1/cron/retry-stuck|30|GET|Retry stuck"
+        "date-update|0 3 * * *|/wp-json/acms/v1/cron/date-update|30|GET|Date update (daily 3am)"
         "bulk-update|* * * * *|/wp-json/acms-cat/v1/cron/bulk-update-worker|90|GET|Bulk update worker"
-        "cache-preload|0 3 * * 0|/wp-json/acms/v1/cache/preload|30|GET|Weekly cache preload"
-        "cache-refresh|0 */4 * * *|/wp-json/acms/v1/cache/smart-refresh|30|POST|Smart cache refresh"
-        "cache-resume|*/30 * * * *|/wp-json/acms/v1/cache/resume-queue|30|POST|Resume cache queue"
+        "cache-preload|0 3 * * 0|/wp-json/acms/v1/cache/preload|30|GET|Cache preload (weekly)"
+        "cache-refresh|0 */4 * * *|/wp-json/acms/v1/cache/smart-refresh|30|POST|Cache refresh (4h)"
+        "cache-resume|*/30 * * * *|/wp-json/acms/v1/cache/resume-queue|30|POST|Cache resume queue"
     )
 
     printf "\n  ${BOLD}%-14s %-28s %s${NC}\n" "Schedule" "Description" "Endpoint"

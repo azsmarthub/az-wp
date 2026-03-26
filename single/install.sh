@@ -415,18 +415,21 @@ CSCRON
         if [[ -n "$api_token" ]]; then
             local base="curl -sk --resolve ${DOMAIN}:443:127.0.0.1"
             local url="https://${DOMAIN}"
+            # Tier 1: Pipeline (*/2), Tier 2: AI (*/5), Tier 3: Maintenance
             local presets=(
-                "scrape|*/5 * * * *|/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
-                "scrape-monitor|*/5 * * * *|/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor"
-                "queue-processor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Queue processor"
-                "queue-monitor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Queue monitor"
-                "product-ai|*/10 * * * *|/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
-                "post-ai|*/10 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI"
-                "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/category-ai|60|GET|Category AI"
-                "brand-ai|*/10 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI"
-                "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand cat AI"
+                "scrape|*/2 * * * *|/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
+                "process-scheduled|*/2 * * * *|/wp-json/acms/v1/automation/process-scheduled|30|GET|Process scheduled"
+                "scrape-monitor|*/2 * * * *|/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor"
+                "queue-processor|*/2 * * * *|/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Queue processor"
+                "queue-monitor|*/2 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Queue monitor"
+                "product-ai|*/5 * * * *|/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
+                "post-ai|*/5 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI"
+                "category-ai|*/5 * * * *|/wp-json/acms-cat/v1/cron/category-ai|60|GET|Category AI"
+                "brand-ai|*/5 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI"
+                "brand-category-ai|*/5 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
                 "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|60|GET|Quick update"
                 "retry-stuck|*/10 * * * *|/wp-json/acms-cat/v1/cron/retry-stuck|30|GET|Retry stuck"
+                "date-update|0 3 * * *|/wp-json/acms/v1/cron/date-update|30|GET|Date update"
                 "bulk-update|* * * * *|/wp-json/acms-cat/v1/cron/bulk-update-worker|90|GET|Bulk update"
                 "cache-preload|0 3 * * 0|/wp-json/acms/v1/cache/preload|30|GET|Cache preload"
                 "cache-refresh|0 */4 * * *|/wp-json/acms/v1/cache/smart-refresh|30|POST|Cache refresh"
@@ -442,7 +445,7 @@ CSCRON
                     > "/etc/cron.d/az-wp-${name}"
                 chmod 644 "/etc/cron.d/az-wp-${name}"
             done
-            log_sub "Installed 15 AffiliateCMS cron jobs."
+            log_sub "Installed 17 AffiliateCMS cron jobs."
         else
             log_warn "API token not found — run 'az-wp cron preset' later."
         fi
