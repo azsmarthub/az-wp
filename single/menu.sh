@@ -1179,10 +1179,107 @@ menu_domain() {
         log_warn "Nginx config error. Run: nginx -t"
     fi
 
+    # ==========================================================
+    # VERIFICATION — check everything updated correctly
+    # ==========================================================
     printf "\n"
     log_success "Domain changed: $old_domain → $new_domain"
-    printf "  Website: https://%s\n" "$new_domain"
-    printf "  Admin:   https://%s/wp-admin\n\n" "$new_domain"
+    printf "\n${BOLD}  Verification:${NC}\n"
+    printf "  ──────────────────────────────────────\n"
+
+    # Website
+    local http_code
+    http_code="$(curl -sfk --resolve "${new_domain}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${new_domain}/" 2>/dev/null)" || http_code="000"
+    if [[ "$http_code" == "200" ]]; then
+        printf "  ${GREEN}OK${NC}  Website:     https://%s (HTTP %s)\n" "$new_domain" "$http_code"
+    else
+        printf "  ${RED}!!${NC}  Website:     https://%s (HTTP %s)\n" "$new_domain" "$http_code"
+    fi
+
+    # WP Admin
+    local admin_code
+    admin_code="$(curl -sfk --resolve "${new_domain}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${new_domain}/wp-admin/" 2>/dev/null)" || admin_code="000"
+    if [[ "$admin_code" == "302" || "$admin_code" == "200" ]]; then
+        printf "  ${GREEN}OK${NC}  WP Admin:    https://%s/wp-admin (HTTP %s)\n" "$new_domain" "$admin_code"
+    else
+        printf "  ${RED}!!${NC}  WP Admin:    https://%s/wp-admin (HTTP %s)\n" "$new_domain" "$admin_code"
+    fi
+
+    # WordPress URL
+    local wp_url
+    wp_url="$(wp_run option get siteurl 2>/dev/null | tr -d '[:space:]')" || wp_url="?"
+    if [[ "$wp_url" == "https://${new_domain}" ]]; then
+        printf "  ${GREEN}OK${NC}  WP siteurl:  %s\n" "$wp_url"
+    else
+        printf "  ${RED}!!${NC}  WP siteurl:  %s (expected https://%s)\n" "$wp_url" "$new_domain"
+    fi
+
+    # Web root
+    if [[ -d "$new_web_root" ]]; then
+        printf "  ${GREEN}OK${NC}  Web root:    %s\n" "$new_web_root"
+    else
+        printf "  ${RED}!!${NC}  Web root:    %s (NOT FOUND)\n" "$new_web_root"
+    fi
+
+    # SSL
+    local ssl_issuer
+    ssl_issuer="$(echo | openssl s_client -connect localhost:443 -servername "$new_domain" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | cut -d= -f3)" || ssl_issuer=""
+    if [[ -n "$ssl_issuer" ]]; then
+        printf "  ${GREEN}OK${NC}  SSL:         %s\n" "$ssl_issuer"
+    else
+        printf "  ${YELLOW}--${NC}  SSL:         not issued (run: az-wp advanced ssl issue)\n"
+    fi
+
+    # Nginx config
+    if nginx -t 2>/dev/null; then
+        printf "  ${GREEN}OK${NC}  Nginx:       config valid\n"
+    else
+        printf "  ${RED}!!${NC}  Nginx:       config ERROR\n"
+    fi
+
+    # Crons — check no old domain refs
+    local old_refs
+    old_refs="$(grep -rl "$old_domain" /etc/cron.d/az-wp-* 2>/dev/null | wc -l)" || old_refs=0
+    local cron_count
+    cron_count="$(ls /etc/cron.d/az-wp-* 2>/dev/null | wc -l)" || cron_count=0
+    if [[ "$old_refs" -eq 0 ]]; then
+        printf "  ${GREEN}OK${NC}  Crons:       %s jobs, all updated\n" "$cron_count"
+    else
+        printf "  ${RED}!!${NC}  Crons:       %s files still reference %s\n" "$old_refs" "$old_domain"
+    fi
+
+    # Cache path
+    local cache_setting
+    cache_setting="$(wp_run option pluck acms_general_settings cache_path 2>/dev/null | tr -d '[:space:]')" || cache_setting="?"
+    printf "  ${GREEN}OK${NC}  Cache path:  %s\n" "${cache_setting:-$CACHE_PATH/}"
+
+    # Cache stats
+    local stats_file="/home/${SITE_USER}/cache/cache-stats.json"
+    if [[ -f "$stats_file" ]]; then
+        local sf_count sf_size
+        sf_count="$(python3 -c "import json; print(json.load(open('$stats_file'))['files'])" 2>/dev/null)" || sf_count="?"
+        sf_size="$(python3 -c "import json; s=json.load(open('$stats_file'))['size']; print(f'{s/1048576:.1f} MB')" 2>/dev/null)" || sf_size="?"
+        printf "  ${GREEN}OK${NC}  Cache stats: %s files, %s\n" "$sf_count" "$sf_size"
+    else
+        printf "  ${YELLOW}--${NC}  Cache stats: not generated yet\n"
+    fi
+
+    # State file
+    local state_domain state_webroot
+    state_domain="$(state_get DOMAIN 2>/dev/null)" || state_domain="?"
+    state_webroot="$(state_get WEB_ROOT 2>/dev/null)" || state_webroot="?"
+    if [[ "$state_domain" == "$new_domain" && "$state_webroot" == "$new_web_root" ]]; then
+        printf "  ${GREEN}OK${NC}  State file:  DOMAIN=%s, WEB_ROOT updated\n" "$state_domain"
+    else
+        printf "  ${RED}!!${NC}  State file:  DOMAIN=%s, WEB_ROOT=%s\n" "$state_domain" "$state_webroot"
+    fi
+
+    # Redis
+    local redis_salt
+    redis_salt="$(wp_run config get WP_CACHE_KEY_SALT 2>/dev/null | tr -d '[:space:]')" || redis_salt="?"
+    printf "  ${GREEN}OK${NC}  Redis salt:  %s\n" "$redis_salt"
+
+    printf "  ──────────────────────────────────────\n\n"
 }
 
 # ===========================================================================
