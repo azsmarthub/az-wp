@@ -64,13 +64,13 @@ show_menu() {
     printf "${CYAN}===================================================${NC}\n\n"
     printf "  1) Status        System + services overview\n"
     printf "  2) WordPress     Update, plugins, debug, maintenance\n"
-    printf "  3) Database      phpMyAdmin, backup, restore\n"
+    printf "  3) Database      phpMyAdmin, optimize, credentials\n"
     printf "  4) Cache         Purge FastCGI + Redis\n"
     printf "  5) Backup        Full backup, restore, schedule\n"
     printf "  6) Cron          Manage cron jobs\n"
     printf "  7) Domain        Change domain\n"
     printf "  8) Advanced      SSL, security, performance, workers\n"
-    printf "  9) Help          Version, update, usage\n"
+    printf "  9) Help          Commands reference\n"
     printf "\n  0) Exit\n"
 }
 
@@ -78,25 +78,61 @@ show_usage() {
     cat <<'EOF'
 Usage: az-wp [command] [subcommand]
 
-Commands:
-  status              System dashboard
-  wp [sub]            WordPress: update, plugins, debug, maintenance, admin-pass, cli
-  db [sub]            Database: pma, backup, restore, optimize, cli
-  cache [sub]         Cache: purge, purge-fcgi, purge-redis, stats
-  backup [sub]        Backup: full, list, schedule
-  cron [sub]          Cron: list, add, remove
-  domain change       Change site domain
-  advanced [sub]      SSL, security, performance, services, workers, pma-config
-  help                Version + usage
+── Quick Actions ──────────────────────────────────
+  az-wp status              System dashboard
+  az-wp cache purge         Purge all caches (FastCGI + Redis)
+  az-wp db pma              Open phpMyAdmin (auto-login URL)
+  az-wp backup full         Full backup (files + DB)
 
-Examples:
-  az-wp status
-  az-wp wp update
-  az-wp cache purge
-  az-wp db pma
-  az-wp cron list
-  az-wp domain change
-  az-wp backup full
+── WordPress ──────────────────────────────────────
+  az-wp wp update           Update core + plugins + themes
+  az-wp wp plugins          List installed plugins
+  az-wp wp debug on|off     Toggle debug mode
+  az-wp wp maintenance      Toggle maintenance mode
+  az-wp wp admin-pass       Reset admin password
+  az-wp wp search-replace   Search & replace in database
+  az-wp wp cli              WP-CLI interactive shell
+
+── Database ───────────────────────────────────────
+  az-wp db pma              phpMyAdmin login URL (24h expiry)
+  az-wp db info             Show DB credentials + paths
+  az-wp db optimize         Optimize database tables
+  az-wp db cli              MySQL CLI prompt
+
+── Cache ──────────────────────────────────────────
+  az-wp cache purge         Purge FastCGI + Redis
+  az-wp cache purge-fcgi    Purge FastCGI only
+  az-wp cache purge-redis   Purge Redis only
+  az-wp cache stats         Cache size + hit stats
+
+── Backup ─────────────────────────────────────────
+  az-wp backup full         Full backup (files + DB)
+  az-wp backup list         List available backups
+  az-wp backup restore FILE Restore from backup
+  az-wp backup schedule     Configure auto backup schedule
+
+── Cron ───────────────────────────────────────────
+  az-wp cron list           List all cron jobs
+  az-wp cron add            Add cron (paste full line)
+  az-wp cron preset         Install AffiliateCMS cron preset
+  az-wp cron remove NAME    Remove a cron job
+  az-wp cron remove-all     Remove all custom crons
+
+── Domain ─────────────────────────────────────────
+  az-wp domain change       Change site domain (DB + nginx + SSL)
+
+── Advanced ───────────────────────────────────────
+  az-wp advanced ssl        SSL: issue, renew, info
+  az-wp advanced security   Fail2Ban status, unban IP, UFW
+  az-wp advanced perf       Performance: retune, TTFB, FPM, OPcache
+  az-wp advanced services   Restart/reload services
+  az-wp advanced workers    FPM pool status, kill stuck
+  az-wp advanced pma-config phpMyAdmin: enable, disable, regenerate
+  az-wp retune              Shortcut: re-tune after VPS resize
+
+── Other ──────────────────────────────────────────
+  az-wp help                This help page
+  az-wp                     Interactive menu
 EOF
 }
 
@@ -339,12 +375,16 @@ menu_cache() {
 # ===========================================================================
 menu_backup() {
     local sub="${1:-}"
+    local backup_dir="/home/${SITE_USER}/backups"
+    local max_backups=5
+    mkdir -p "$backup_dir"
+
     if [[ -z "$sub" ]]; then
         _header "Backup & Restore"
         printf "  1) Full backup (files + DB)\n"
         printf "  2) List backups\n"
         printf "  3) Restore from backup\n"
-        printf "  4) Schedule daily backup\n"
+        printf "  4) Schedule auto backup\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
@@ -352,9 +392,6 @@ menu_backup() {
             4) sub="schedule" ;; *) return 0 ;;
         esac
     fi
-
-    local backup_dir="/home/${SITE_USER}/backups"
-    mkdir -p "$backup_dir"
 
     case "$sub" in
         full)
@@ -384,11 +421,17 @@ menu_backup() {
             log_success "Backup complete (${elapsed}s)"
             printf "  DB:    %s (%s)\n" "$db_file" "$(format_size "$db_size")"
             printf "  Files: %s (%s)\n" "$files_file" "$(format_size "$files_size")"
+
+            # Retention: keep only last N backups (pairs)
+            _backup_cleanup "$backup_dir"
             ;;
         list)
             _header "Available Backups"
-            ls -lhS "$backup_dir"/*.gz 2>/dev/null || log_info "No backups found."
-            printf "\n  Total: %s\n" "$(du -sh "$backup_dir" 2>/dev/null | awk '{print $1}')"
+            ls -lht "$backup_dir"/*.gz 2>/dev/null || log_info "No backups found."
+            local count; count="$(ls "$backup_dir"/*-db-*.sql.gz 2>/dev/null | wc -l)"
+            printf "\n  Backups: %s (max %s kept)\n" "$count" "$max_backups"
+            printf "  Total:   %s\n" "$(du -sh "$backup_dir" 2>/dev/null | awk '{print $1}')"
+            printf "  Path:    %s\n" "$backup_dir"
             ;;
         restore)
             local file="${2:-}"
@@ -403,22 +446,85 @@ menu_backup() {
                 chown -R "$SITE_USER:$SITE_USER" "$WEB_ROOT"
                 log_success "Files restored."
             else
-                log_warn "Unrecognized backup format. Use -db- or -files- in filename."
+                log_warn "Unrecognized format. Expected: *-db-*.sql.gz or *-files-*.tar.gz"
             fi
             ;;
         schedule)
-            local sched="${2:-daily}"
-            local cron_file="/etc/cron.d/az-wp-backup"
-            if [[ "$sched" == "daily" ]]; then
-                printf '# az-wp: daily backup at 3:00 AM\n0 3 * * * root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1\n' > "$cron_file"
-            elif [[ "$sched" == "weekly" ]]; then
-                printf '# az-wp: weekly backup Sunday 3:00 AM\n0 3 * * 0 root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1\n' > "$cron_file"
+            _header "Backup Schedule"
+            # Show current schedule
+            if [[ -f /etc/cron.d/az-wp-backup ]]; then
+                printf "  Current: ${GREEN}%s${NC}\n\n" "$(head -1 /etc/cron.d/az-wp-backup | sed 's/^# az-wp: //')"
+            else
+                printf "  Current: ${DIM}not scheduled${NC}\n\n"
             fi
-            chmod 644 "$cron_file"
-            log_success "Backup scheduled: $sched"
+
+            printf "  1) Daily (every day at 3:00 AM)\n"
+            printf "  2) Every 2 days\n"
+            printf "  3) Mon-Wed-Fri\n"
+            printf "  4) Tue-Thu-Sat\n"
+            printf "  5) Weekly (Sunday 3:00 AM)\n"
+            printf "  6) Disable auto backup\n"
+            printf "  0) Back\n\n"
+            local sched_choice
+            read -rp "  Choose: " sched_choice
+
+            local cron_file="/etc/cron.d/az-wp-backup"
+            local cron_cmd="root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1"
+            case "$sched_choice" in
+                1) printf '# az-wp: daily backup at 3:00 AM\n0 3 * * * %s\n' "$cron_cmd" > "$cron_file"
+                   log_success "Scheduled: daily at 3:00 AM" ;;
+                2) printf '# az-wp: backup every 2 days at 3:00 AM\n0 3 */2 * * %s\n' "$cron_cmd" > "$cron_file"
+                   log_success "Scheduled: every 2 days at 3:00 AM" ;;
+                3) printf '# az-wp: backup Mon-Wed-Fri at 3:00 AM\n0 3 * * 1,3,5 %s\n' "$cron_cmd" > "$cron_file"
+                   log_success "Scheduled: Mon-Wed-Fri at 3:00 AM" ;;
+                4) printf '# az-wp: backup Tue-Thu-Sat at 3:00 AM\n0 3 * * 2,4,6 %s\n' "$cron_cmd" > "$cron_file"
+                   log_success "Scheduled: Tue-Thu-Sat at 3:00 AM" ;;
+                5) printf '# az-wp: weekly backup Sunday at 3:00 AM\n0 3 * * 0 %s\n' "$cron_cmd" > "$cron_file"
+                   log_success "Scheduled: weekly (Sunday 3:00 AM)" ;;
+                6) rm -f "$cron_file"
+                   log_success "Auto backup disabled." ;;
+                *) return 0 ;;
+            esac
+            [[ -f "$cron_file" ]] && chmod 644 "$cron_file"
+            printf "  ${DIM}Retention: last %s backups kept${NC}\n" "$max_backups"
             ;;
         *) log_warn "Unknown: $sub" ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# Backup cleanup: keep only last N backup pairs
+# ---------------------------------------------------------------------------
+_backup_cleanup() {
+    local dir="$1"
+    local max=5
+
+    # Clean DB backups (keep newest 5)
+    local db_files
+    db_files="$(ls -t "$dir"/*-db-*.sql.gz 2>/dev/null)" || return 0
+    local count=0
+    local f
+    while IFS= read -r f; do
+        count=$((count + 1))
+        if [[ $count -gt $max ]]; then
+            local size; size="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+            rm -f "$f"
+            log_sub "Removed old backup: $(basename "$f") ($(format_size "$size"))"
+        fi
+    done <<< "$db_files"
+
+    # Clean file backups (keep newest 5)
+    local file_files
+    file_files="$(ls -t "$dir"/*-files-*.tar.gz 2>/dev/null)" || return 0
+    count=0
+    while IFS= read -r f; do
+        count=$((count + 1))
+        if [[ $count -gt $max ]]; then
+            local size; size="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+            rm -f "$f"
+            log_sub "Removed old backup: $(basename "$f") ($(format_size "$size"))"
+        fi
+    done <<< "$file_files"
 }
 
 # ===========================================================================
@@ -528,8 +634,8 @@ _cron_show_all() {
         [[ ! -f "$f" ]] && continue
         found=1
         local name; name="$(basename "$f")"
-        local desc; desc="$(head -1 "$f" | sed 's/^# az-wp[: ]*//')"
-        local sched; sched="$(grep -v '^#' "$f" | grep -v '^$' | head -1 | awk '{print $1,$2,$3,$4,$5}')"
+        local desc; desc="$(head -1 "$f" | sed 's/^# az-wp[: ]*//' || true)"
+        local sched; sched="$(grep -v '^#' "$f" | grep -v '^$' | head -1 | awk '{print $1,$2,$3,$4,$5}' || true)"
         printf "    ${GREEN}%-30s${NC} %-12s %s\n" "$name" "$sched" "$desc"
     done
     [[ "$found" -eq 0 ]] && printf "    (none)\n"
