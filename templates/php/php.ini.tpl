@@ -36,4 +36,5 @@ realpath_cache_ttl = 600
 ; Note: exec is allowed because AffiliateCMS CachePreload needs it
 ; for cache management (ps, find, nginx-cache-purge)
 disable_functions = passthru,shell_exec,system,proc_open,popen
-open_basedir = ${WEB_ROOT}:/tmp:/usr/share/php:/run/redis
+; Include parent home dir for cache access (/home/user/cache/)
+open_basedir = ${SITE_HOME}:/tmp:/usr/share/php:/run/redis

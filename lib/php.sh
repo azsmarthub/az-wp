@@ -45,12 +45,15 @@ install_php() {
 configure_php_ini() {
     log_sub "Configuring PHP ini settings..."
 
-    export TUNE_PHP_MEMORY_LIMIT WEB_ROOT
+    # SITE_HOME = parent of WEB_ROOT (e.g. /home/user/)
+    local SITE_HOME
+    SITE_HOME="$(dirname "$WEB_ROOT")"
+    export TUNE_PHP_MEMORY_LIMIT SITE_HOME
 
     render_template \
         "${AZ_DIR}/templates/php/php.ini.tpl" \
         "/etc/php/${PHP_VERSION}/fpm/conf.d/99-az-wp.ini" \
-        "TUNE_PHP_MEMORY_LIMIT WEB_ROOT"
+        "TUNE_PHP_MEMORY_LIMIT SITE_HOME"
 
     log_sub "PHP ini configured (memory_limit=${TUNE_PHP_MEMORY_LIMIT})"
 }
