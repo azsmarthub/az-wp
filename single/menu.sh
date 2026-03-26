@@ -1085,26 +1085,25 @@ menu_domain() {
         WEB_ROOT="$new_web_root"
     fi
 
-    # === Step 4: Nginx config ===
-    log_sub "4/9 Updating Nginx configuration..."
-    local old_conf="/etc/nginx/sites-available/${old_domain}.conf"
+    # === Step 4: Nginx config (re-render from template — safer than sed) ===
+    log_sub "4/9 Rebuilding Nginx configuration..."
     local new_conf="/etc/nginx/sites-available/${new_domain}.conf"
 
-    if [[ -f "$old_conf" ]]; then
-        # Replace domain and old web root path
-        sed -i "s|${old_domain}|${new_domain}|g" "$old_conf"
-        sed -i "s|${old_web_root}|${new_web_root}|g" "$old_conf"
-        if [[ "$old_conf" != "$new_conf" ]]; then
-            mv "$old_conf" "$new_conf"
-            rm -f "/etc/nginx/sites-enabled/${old_domain}.conf"
-            ln -sf "$new_conf" "/etc/nginx/sites-enabled/${new_domain}.conf"
-        fi
+    export DOMAIN="$new_domain" WEB_ROOT="$new_web_root" PHP_VERSION
+    envsubst '$DOMAIN $WEB_ROOT $PHP_VERSION' < "${AZ_DIR}/templates/nginx/site.conf.tpl" > "$new_conf"
+
+    # Remove old config and symlink
+    rm -f "/etc/nginx/sites-available/${old_domain}.conf" 2>/dev/null
+    rm -f "/etc/nginx/sites-enabled/${old_domain}.conf" 2>/dev/null
+    ln -sf "$new_conf" "/etc/nginx/sites-enabled/${new_domain}.conf"
+
+    # Re-add phpMyAdmin include if exists
+    if [[ -f /etc/nginx/az-wp-pma.conf ]]; then
+        sed -i '/^}$/i \    include /etc/nginx/az-wp-pma.conf;' "$new_conf" 2>/dev/null || true
     fi
 
-    # Update phpMyAdmin include if exists
-    if [[ -f /etc/nginx/az-wp-pma.conf ]]; then
-        sed -i "s|${old_domain}|${new_domain}|g" /etc/nginx/az-wp-pma.conf 2>/dev/null || true
-    fi
+    # Make sure nginx works before SSL
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null
 
     # === Step 5: SSL certificate ===
     log_sub "5/9 Issuing new SSL certificate..."
