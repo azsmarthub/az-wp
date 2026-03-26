@@ -381,77 +381,123 @@ menu_backup() {
 
     if [[ -z "$sub" ]]; then
         _header "Backup & Restore"
-        printf "  1) Full backup (files + DB)\n"
-        printf "  2) List backups\n"
-        printf "  3) Restore from backup\n"
-        printf "  4) Schedule auto backup\n"
+        # Show current status
+        local bk_count; bk_count="$(ls "$backup_dir"/*-db-*.sql.gz 2>/dev/null | wc -l || echo 0)"
+        local bk_total; bk_total="$(du -sh "$backup_dir" 2>/dev/null | awk '{print $1}')" || bk_total="0"
+        local bk_sched="not scheduled"
+        [[ -f /etc/cron.d/az-wp-backup ]] && bk_sched="$(head -1 /etc/cron.d/az-wp-backup | sed 's/^# az-wp: //' || true)"
+        printf "  Backups: %s (max %s) | Size: %s | Auto: %s\n\n" "$bk_count" "$max_backups" "$bk_total" "$bk_sched"
+
+        printf "  ${BOLD}Create:${NC}\n"
+        printf "  1) Full backup (DB + files)\n"
+        printf "  2) Database only\n"
+        printf "  3) Source only (files, no DB)\n\n"
+        printf "  ${BOLD}Manage:${NC}\n"
+        printf "  4) List backups\n"
+        printf "  5) Restore from backup\n"
+        printf "  6) Schedule auto backup\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
-            1) sub="full" ;; 2) sub="list" ;; 3) sub="restore" ;;
-            4) sub="schedule" ;; *) return 0 ;;
+            1) sub="full" ;; 2) sub="db" ;; 3) sub="source" ;;
+            4) sub="list" ;; 5) sub="restore" ;; 6) sub="schedule" ;;
+            *) return 0 ;;
         esac
     fi
 
     case "$sub" in
         full)
-            local ts; ts="$(date +%Y%m%d-%H%M%S)"
-            local start_ts; start_ts="$(date +%s)"
-            log_info "Starting full backup..."
-
-            # DB
-            local db_file="$backup_dir/${DOMAIN}-db-${ts}.sql.gz"
-            log_sub "Backing up database..."
-            ionice -c3 nice -n 19 mysqldump --single-transaction --quick --lock-tables=false \
-                --routines --triggers -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null \
-                | gzip > "$db_file"
-
-            # Files
-            local files_file="$backup_dir/${DOMAIN}-files-${ts}.tar.gz"
-            log_sub "Backing up files..."
-            ionice -c3 nice -n 19 tar czf "$files_file" \
-                --exclude='wp-content/cache/*' --exclude='wp-content/updraft/*' \
-                --exclude='wp-content/upgrade/*' --exclude='.git' \
-                --exclude='node_modules' --exclude='*.log' \
-                -C "$(dirname "$WEB_ROOT")" "$(basename "$WEB_ROOT")" 2>/dev/null || true
-
-            local elapsed=$(( $(date +%s) - start_ts ))
-            local db_size; db_size="$(stat -c%s "$db_file" 2>/dev/null || echo 0)"
-            local files_size; files_size="$(stat -c%s "$files_file" 2>/dev/null || echo 0)"
-            log_success "Backup complete (${elapsed}s)"
-            printf "  DB:    %s (%s)\n" "$db_file" "$(format_size "$db_size")"
-            printf "  Files: %s (%s)\n" "$files_file" "$(format_size "$files_size")"
-
-            # Retention: keep only last N backups (pairs)
-            _backup_cleanup "$backup_dir"
+            _backup_run "full"
+            ;;
+        db)
+            _backup_run "db"
+            ;;
+        source)
+            _backup_run "source"
             ;;
         list)
             _header "Available Backups"
-            ls -lht "$backup_dir"/*.gz 2>/dev/null || log_info "No backups found."
-            local count; count="$(ls "$backup_dir"/*-db-*.sql.gz 2>/dev/null | wc -l)"
-            printf "\n  Backups: %s (max %s kept)\n" "$count" "$max_backups"
-            printf "  Total:   %s\n" "$(du -sh "$backup_dir" 2>/dev/null | awk '{print $1}')"
-            printf "  Path:    %s\n" "$backup_dir"
+            local i=0
+            for f in $(ls -t "$backup_dir"/*.gz 2>/dev/null); do
+                i=$((i + 1))
+                local name; name="$(basename "$f")"
+                local size; size="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+                local date_str; date_str="$(stat -c%y "$f" 2>/dev/null | cut -d. -f1)"
+                local type="?"
+                [[ "$name" == *-db-* ]] && type="DB"
+                [[ "$name" == *-files-* ]] && type="FILES"
+                [[ "$name" == *-source-* ]] && type="SOURCE"
+                printf "  %2d) %-6s %-12s %-20s %s\n" "$i" "$type" "$(format_size "$size")" "$date_str" "$name"
+            done
+            [[ $i -eq 0 ]] && printf "  (no backups found)\n"
+            printf "\n  Total: %s | Path: %s\n" "$(du -sh "$backup_dir" 2>/dev/null | awk '{print $1}')" "$backup_dir"
             ;;
         restore)
-            local file="${2:-}"
-            [[ -z "$file" ]] && { read -rp "  Backup file path: " file; }
-            [[ ! -f "$file" ]] && { log_error "File not found: $file"; return 1; }
-            confirm "This will OVERWRITE current data. Continue?" || return 0
-            if [[ "$file" == *-db-*.sql.gz ]]; then
-                gunzip -c "$file" | mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
-                log_success "Database restored."
-            elif [[ "$file" == *-files-*.tar.gz ]]; then
-                tar xzf "$file" -C "$(dirname "$WEB_ROOT")"
-                chown -R "$SITE_USER:$SITE_USER" "$WEB_ROOT"
-                log_success "Files restored."
+            _header "Restore from Backup"
+            # List available backups for selection
+            local files=()
+            local i=0
+            for f in $(ls -t "$backup_dir"/*.gz 2>/dev/null); do
+                i=$((i + 1))
+                files+=("$f")
+                local name; name="$(basename "$f")"
+                local size; size="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+                local type="?"
+                [[ "$name" == *-db-* ]] && type="${CYAN}DB${NC}"
+                [[ "$name" == *-files-* ]] && type="${YELLOW}FULL${NC}"
+                [[ "$name" == *-source-* ]] && type="${GREEN}SRC${NC}"
+                printf "  %2d) ${type}  %-12s %s\n" "$i" "$(format_size "$size")" "$name"
+            done
+            if [[ $i -eq 0 ]]; then
+                log_info "No backups found in $backup_dir"
+                return 0
+            fi
+            printf "\n"
+            local choice
+            read -rp "  Select backup number (0=back): " choice
+            [[ -z "$choice" || "$choice" == "0" ]] && return 0
+
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 && $choice -le $i ]]; then
+                local file="${files[$((choice - 1))]}"
+                local fname; fname="$(basename "$file")"
+                printf "\n  Selected: ${BOLD}%s${NC} (%s)\n\n" "$fname" "$(format_size "$(stat -c%s "$file")")"
+
+                if [[ "$fname" == *-db-*.sql.gz ]]; then
+                    confirm "Restore DATABASE? This will OVERWRITE all data." || return 0
+                    printf "  Restoring database"
+                    # Use pv for progress if available, otherwise show dots
+                    local fsize; fsize="$(stat -c%s "$file")"
+                    if command -v pv >/dev/null 2>&1; then
+                        pv -p -t -e "$file" | gunzip | mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null
+                    else
+                        printf "..."
+                        gunzip -c "$file" | mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null
+                    fi
+                    printf "\n"
+                    # Flush caches after DB restore
+                    redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
+                    log_success "Database restored from $fname"
+
+                elif [[ "$fname" == *-files-*.tar.gz || "$fname" == *-source-*.tar.gz ]]; then
+                    confirm "Restore FILES? This will OVERWRITE site files." || return 0
+                    printf "  Extracting"
+                    if command -v pv >/dev/null 2>&1; then
+                        pv -p -t -e "$file" | tar xzf - -C "$(dirname "$WEB_ROOT")" 2>/dev/null
+                    else
+                        printf "..."
+                        tar xzf "$file" -C "$(dirname "$WEB_ROOT")" 2>/dev/null
+                    fi
+                    printf "\n"
+                    chown -R "$SITE_USER:$SITE_USER" "$WEB_ROOT"
+                    systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
+                    log_success "Files restored from $fname"
+                fi
             else
-                log_warn "Unrecognized format. Expected: *-db-*.sql.gz or *-files-*.tar.gz"
+                log_warn "Invalid selection."
             fi
             ;;
         schedule)
             _header "Backup Schedule"
-            # Show current schedule
             if [[ -f /etc/cron.d/az-wp-backup ]]; then
                 printf "  Current: ${GREEN}%s${NC}\n\n" "$(head -1 /etc/cron.d/az-wp-backup | sed 's/^# az-wp: //')"
             else
@@ -490,6 +536,78 @@ menu_backup() {
             ;;
         *) log_warn "Unknown: $sub" ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# Backup runner: handles full, db, source with progress
+# ---------------------------------------------------------------------------
+_backup_run() {
+    local mode="$1"  # full, db, source
+    local backup_dir="/home/${SITE_USER}/backups"
+    local ts; ts="$(date +%Y%m%d-%H%M%S)"
+    local start_ts; start_ts="$(date +%s)"
+
+    case "$mode" in
+        full) log_info "Starting full backup (DB + files)..." ;;
+        db)   log_info "Starting database backup..." ;;
+        source) log_info "Starting source backup (files only)..." ;;
+    esac
+
+    # DB backup (for full and db modes)
+    if [[ "$mode" == "full" || "$mode" == "db" ]]; then
+        local db_file="$backup_dir/${DOMAIN}-db-${ts}.sql.gz"
+        log_sub "Dumping database..."
+
+        # Show progress: estimate DB size first
+        local db_est
+        db_est="$(mysql -u "$DB_USER" -p"$DB_PASS" -N -e \
+            "SELECT ROUND(SUM(data_length + index_length)/1048576) FROM information_schema.tables WHERE table_schema='$DB_NAME'" 2>/dev/null || echo "?")"
+        log_sub "Database size: ~${db_est}MB"
+
+        ionice -c3 nice -n 19 mysqldump --single-transaction --quick --lock-tables=false \
+            --routines --triggers --max-allowed-packet=256M \
+            -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null \
+            | ionice -c3 nice -n 19 gzip > "$db_file"
+
+        local db_size; db_size="$(stat -c%s "$db_file" 2>/dev/null || echo 0)"
+        log_sub "DB backup: $(format_size "$db_size") → $db_file"
+    fi
+
+    # Files backup (for full and source modes)
+    if [[ "$mode" == "full" || "$mode" == "source" ]]; then
+        local files_file="$backup_dir/${DOMAIN}-${mode}-${ts}.tar.gz"
+        if [[ "$mode" == "full" ]]; then
+            files_file="$backup_dir/${DOMAIN}-files-${ts}.tar.gz"
+        else
+            files_file="$backup_dir/${DOMAIN}-source-${ts}.tar.gz"
+        fi
+
+        # Estimate size
+        local src_est
+        src_est="$(du -sh "$WEB_ROOT" 2>/dev/null | awk '{print $1}')" || src_est="?"
+        log_sub "Compressing files (~${src_est} uncompressed)..."
+
+        ionice -c3 nice -n 19 tar czf "$files_file" \
+            --exclude='wp-content/cache/*' \
+            --exclude='wp-content/updraft/*' \
+            --exclude='wp-content/upgrade/*' \
+            --exclude='wp-content/ai1wm-backups/*' \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='*.log' \
+            -C "$(dirname "$WEB_ROOT")" "$(basename "$WEB_ROOT")" 2>/dev/null || true
+
+        local files_size; files_size="$(stat -c%s "$files_file" 2>/dev/null || echo 0)"
+        log_sub "Files backup: $(format_size "$files_size") → $files_file"
+    fi
+
+    local elapsed=$(( $(date +%s) - start_ts ))
+    local elapsed_str="${elapsed}s"
+    [[ $elapsed -ge 60 ]] && elapsed_str="$((elapsed / 60))m $((elapsed % 60))s"
+    log_success "Backup complete (${elapsed_str})"
+
+    # Retention
+    _backup_cleanup "$backup_dir"
 }
 
 # ---------------------------------------------------------------------------
@@ -1010,15 +1128,16 @@ menu_advanced() {
         printf "  1) SSL Management\n"
         printf "  2) Security (Fail2Ban, UFW)\n"
         printf "  3) Performance (retune, TTFB, FPM, OPcache)\n"
-        printf "  4) Services (restart, reload)\n"
-        printf "  5) Workers (FPM pools)\n"
-        printf "  6) phpMyAdmin config\n"
+        printf "  4) PHP Info (config, extensions, update)\n"
+        printf "  5) Services (restart, reload)\n"
+        printf "  6) Workers (FPM pools)\n"
+        printf "  7) phpMyAdmin config\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
             1) sub="ssl" ;; 2) sub="security" ;; 3) sub="perf" ;;
-            4) sub="services" ;; 5) sub="workers" ;; 6) sub="pma-config" ;;
-            *) return 0 ;;
+            4) sub="php" ;; 5) sub="services" ;; 6) sub="workers" ;;
+            7) sub="pma-config" ;; *) return 0 ;;
         esac
     fi
 
@@ -1129,6 +1248,81 @@ menu_advanced() {
                 reload-fpm)
                     service_restart "php${PHP_VERSION}-fpm"
                     log_success "PHP-FPM restarted (OPcache cleared)."
+                    ;;
+            esac
+            ;;
+
+        # --- PHP Info ---
+        php)
+            local php_sub="${2:-}"
+            if [[ -z "$php_sub" ]]; then
+                _header "PHP ${PHP_VERSION} Info"
+
+                # Version
+                local php_ver; php_ver="$(php${PHP_VERSION} -v 2>/dev/null | head -1 | grep -oP 'PHP \K[0-9.]+' || echo '?')"
+                printf "  Version:    ${GREEN}PHP %s${NC}\n" "$php_ver"
+
+                # Key config values
+                local mem_limit max_exec upload_max
+                mem_limit="$(grep 'memory_limit' /etc/php/${PHP_VERSION}/fpm/conf.d/99-az-wp.ini 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '?')"
+                max_exec="$(grep 'max_execution_time' /etc/php/${PHP_VERSION}/fpm/conf.d/99-az-wp.ini 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '?')"
+                upload_max="$(grep 'upload_max_filesize' /etc/php/${PHP_VERSION}/fpm/conf.d/99-az-wp.ini 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '?')"
+                printf "  Memory:     %s\n" "$mem_limit"
+                printf "  Max exec:   %ss\n" "$max_exec"
+                printf "  Upload max: %s\n" "$upload_max"
+
+                # OPcache
+                local oc_mem; oc_mem="$(grep 'memory_consumption' /etc/php/${PHP_VERSION}/fpm/conf.d/10-opcache-az.ini 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '?')"
+                local oc_jit; oc_jit="$(grep 'jit_buffer_size' /etc/php/${PHP_VERSION}/fpm/conf.d/10-opcache-az.ini 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '0')"
+                printf "  OPcache:    %sMB | JIT: %s\n" "$oc_mem" "$oc_jit"
+
+                # FPM pools
+                local web_max; web_max="$(grep 'pm.max_children' /etc/php/${PHP_VERSION}/fpm/pool.d/web.conf 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '?')"
+                local wrk_max; wrk_max="$(grep 'pm.max_children' /etc/php/${PHP_VERSION}/fpm/pool.d/workers.conf 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo '?')"
+                printf "  FPM:        web=%s | workers=%s\n" "$web_max" "$wrk_max"
+
+                # Extensions
+                printf "\n  ${BOLD}Extensions:${NC}\n"
+                local ext ext_list
+                ext_list="$(php${PHP_VERSION} -m 2>/dev/null | grep -v '^\[' | sort | tr '\n' ' ' || true)"
+                local ext_count; ext_count="$(php${PHP_VERSION} -m 2>/dev/null | grep -v '^\[' | grep -v '^$' | wc -l || echo 0)"
+                printf "  Total: %s loaded\n\n" "$ext_count"
+
+                # Show key extensions with status
+                local key_exts="bcmath curl dom exif fileinfo gd iconv igbinary imagick intl mbstring mysqli opcache pdo_mysql redis soap xml zip"
+                for ext in $key_exts; do
+                    if php${PHP_VERSION} -m 2>/dev/null | grep -qi "^${ext}$"; then
+                        printf "    ${GREEN}%-15s ON${NC}\n" "$ext"
+                    else
+                        printf "    ${RED}%-15s OFF${NC}\n" "$ext"
+                    fi
+                done
+
+                printf "\n  1) Install extension\n"
+                printf "  2) Show all loaded modules\n"
+                printf "  0) Back\n\n"
+                read -rp "  Choose: " php_sub
+                case "$php_sub" in 1) php_sub="install-ext" ;; 2) php_sub="modules" ;; *) return 0 ;; esac
+            fi
+            case "$php_sub" in
+                install-ext)
+                    local ext_name
+                    read -rp "  Extension name (e.g. memcached, xdebug): " ext_name
+                    [[ -z "$ext_name" ]] && return 0
+                    local pkg="php${PHP_VERSION}-${ext_name}"
+                    printf "  Installing %s...\n" "$pkg"
+                    if NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" > /dev/null 2>&1; then
+                        systemctl restart "php${PHP_VERSION}-fpm"
+                        log_success "$pkg installed and FPM restarted."
+                    else
+                        log_error "Package $pkg not found or install failed."
+                        printf "  ${DIM}Search available: apt-cache search php${PHP_VERSION}${NC}\n"
+                    fi
+                    ;;
+                modules)
+                    _header "All PHP ${PHP_VERSION} Modules"
+                    php${PHP_VERSION} -m 2>/dev/null | grep -v '^\[' | grep -v '^$' | sort | column 2>/dev/null || \
+                        php${PHP_VERSION} -m 2>/dev/null | grep -v '^\[' | grep -v '^$' | sort
                     ;;
             esac
             ;;

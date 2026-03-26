@@ -317,6 +317,14 @@ step_wordpress() {
     set_wp_permissions
     setup_wp_cron
     setup_logrotate
+
+    # Default auto backup: every 2 days at 3:00 AM
+    log_sub "Setting up auto backup (every 2 days)..."
+    local backup_dir="/home/${SITE_USER}/backups"
+    mkdir -p "$backup_dir"
+    printf '# az-wp: backup every 2 days at 3:00 AM\n0 3 */2 * * root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1\n' \
+        > /etc/cron.d/az-wp-backup
+    chmod 644 /etc/cron.d/az-wp-backup
 }
 
 # ---------------------------------------------------------------------------
