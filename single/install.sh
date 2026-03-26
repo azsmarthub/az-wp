@@ -329,6 +329,12 @@ step_wordpress() {
         log_sub "Extracting wp-content..."
         tar xzf "$clone_dir/wp-content.tar.gz" -C "$WEB_ROOT" 2>/dev/null
 
+        # Fix hardcoded CDN URL in theme config
+        local theme_config="$WEB_ROOT/wp-content/themes/affiliateCMS-theme/inc/config.php"
+        if [[ -f "$theme_config" ]]; then
+            sed -i "s|https://cdn.productreviews.org/logo.png|/wp-content/uploads/2026/02/logo.png|g" "$theme_config"
+        fi
+
         log_sub "Search & replace domain..."
         # Replace original production domain
         sudo -u "$SITE_USER" wp search-replace 'productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
