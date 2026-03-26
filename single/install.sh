@@ -349,12 +349,8 @@ step_wordpress() {
         sudo -u "$SITE_USER" wp config set WP_CACHE_KEY_SALT "${DOMAIN}_" --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
 
         log_sub "Enabling Redis Object Cache..."
-        # Ensure redis-cache plugin is installed (clone may have it but drop-in missing)
-        if [[ ! -d "$WEB_ROOT/wp-content/plugins/redis-cache" ]]; then
-            sudo -u "$SITE_USER" wp plugin install redis-cache --activate --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
-        else
-            sudo -u "$SITE_USER" wp plugin activate redis-cache --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
-        fi
+        # Always fresh install redis-cache (clone may have incomplete plugin files)
+        sudo -u "$SITE_USER" wp plugin install redis-cache --force --activate --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
         sudo -u "$SITE_USER" wp redis enable --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
         log_sub "Configuring cache path..."
