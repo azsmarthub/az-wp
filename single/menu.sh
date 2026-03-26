@@ -1044,43 +1044,56 @@ menu_domain() {
     local sub="${1:-change}"
 
     _header "Domain Management"
-    printf "  Current domain: ${GREEN}%s${NC}\n\n" "$DOMAIN"
+    printf "  Current domain: ${GREEN}%s${NC}\n" "$DOMAIN"
+    printf "  Web root:       %s\n" "$WEB_ROOT"
+    printf "  Cache path:     %s\n\n" "$CACHE_PATH"
 
     local new_domain
     read -rp "  New domain: " new_domain
     [[ -z "$new_domain" ]] && { log_warn "No domain entered."; return; }
     [[ "$new_domain" == "$DOMAIN" ]] && { log_warn "Same as current domain."; return; }
 
-    printf "\n  ${BOLD}This will:${NC}\n"
-    printf "    1. Search & replace '%s' → '%s' in database\n" "$DOMAIN" "$new_domain"
-    printf "    2. Update WordPress URLs\n"
-    printf "    3. Update Nginx configuration\n"
-    printf "    4. Issue new SSL certificate\n"
-    printf "    5. Update cron jobs\n"
-    printf "    6. Update state file\n\n"
+    local old_domain="$DOMAIN"
+    local old_web_root="$WEB_ROOT"
+    local new_web_root="/home/${SITE_USER}/${new_domain}"
+
+    printf "\n  ${BOLD}Changes:${NC}\n"
+    printf "    Domain:    %s → %s\n" "$old_domain" "$new_domain"
+    printf "    Web root:  %s → %s\n" "$old_web_root" "$new_web_root"
+    printf "    Database:  search & replace all URLs\n"
+    printf "    Nginx:     new server_name + config file\n"
+    printf "    SSL:       new certificate\n"
+    printf "    Cron:      update all domain references\n"
+    printf "    Cache:     flush all + update paths\n\n"
 
     confirm "Proceed with domain change?" || return 0
 
-    local old_domain="$DOMAIN"
-
-    # 1. Database search & replace
-    log_sub "Replacing in database: $old_domain → $new_domain ..."
+    # === Step 1: Database search & replace ===
+    log_sub "1/9 Replacing in database: $old_domain → $new_domain ..."
     wp_run search-replace "$old_domain" "$new_domain" --all-tables --precise > /dev/null
     wp_run search-replace "http://$old_domain" "https://$new_domain" --all-tables --precise > /dev/null
-    wp_run search-replace "https://$old_domain" "https://$new_domain" --all-tables --precise > /dev/null
 
-    # 2. Update WordPress URLs
-    log_sub "Updating WordPress site URL..."
+    # === Step 2: WordPress URLs ===
+    log_sub "2/9 Updating WordPress site URL..."
     wp_run option update siteurl "https://$new_domain" > /dev/null
     wp_run option update home "https://$new_domain" > /dev/null
 
-    # 3. Update Nginx config
-    log_sub "Updating Nginx configuration..."
+    # === Step 3: Rename web root directory ===
+    log_sub "3/9 Renaming web root..."
+    if [[ "$old_web_root" != "$new_web_root" && -d "$old_web_root" ]]; then
+        mv "$old_web_root" "$new_web_root"
+        WEB_ROOT="$new_web_root"
+    fi
+
+    # === Step 4: Nginx config ===
+    log_sub "4/9 Updating Nginx configuration..."
     local old_conf="/etc/nginx/sites-available/${old_domain}.conf"
     local new_conf="/etc/nginx/sites-available/${new_domain}.conf"
 
     if [[ -f "$old_conf" ]]; then
-        sed -i "s/${old_domain}/${new_domain}/g" "$old_conf"
+        # Replace domain and old web root path
+        sed -i "s|${old_domain}|${new_domain}|g" "$old_conf"
+        sed -i "s|${old_web_root}|${new_web_root}|g" "$old_conf"
         if [[ "$old_conf" != "$new_conf" ]]; then
             mv "$old_conf" "$new_conf"
             rm -f "/etc/nginx/sites-enabled/${old_domain}.conf"
@@ -1088,36 +1101,69 @@ menu_domain() {
         fi
     fi
 
-    # Update error log path in nginx config
-    sed -i "s|${old_domain}-error.log|${new_domain}-error.log|g" "$new_conf" 2>/dev/null || true
+    # Update phpMyAdmin include if exists
+    if [[ -f /etc/nginx/az-wp-pma.conf ]]; then
+        sed -i "s|${old_domain}|${new_domain}|g" /etc/nginx/az-wp-pma.conf 2>/dev/null || true
+    fi
 
-    # 4. SSL — remove old, issue new
-    log_sub "Updating SSL certificate..."
-    # Detect public IP for SSL
+    # === Step 5: SSL certificate ===
+    log_sub "5/9 Issuing new SSL certificate..."
     PUBLIC_IP="$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null)" || PUBLIC_IP=""
     DOMAIN="$new_domain"
-    issue_certificate 2>/dev/null || log_warn "SSL issue failed. Run 'az-wp advanced' → SSL later."
+    WP_ADMIN_EMAIL="$(state_get WP_ADMIN_EMAIL 2>/dev/null)" || true
+    issue_certificate 2>/dev/null || log_warn "SSL issue failed. Run 'az-wp advanced ssl issue' later."
 
-    # 5. Update cron jobs
-    log_sub "Updating cron jobs..."
+    # === Step 6: Cron jobs ===
+    log_sub "6/9 Updating cron jobs..."
     for f in /etc/cron.d/az-wp-*; do
-        [[ -f "$f" ]] && sed -i "s/${old_domain}/${new_domain}/g" "$f"
+        [[ -f "$f" ]] && sed -i "s|${old_domain}|${new_domain}|g" "$f"
     done
+    # Update wp-cron path
+    if [[ -f /etc/cron.d/az-wp-cron ]]; then
+        sed -i "s|${old_web_root}|${new_web_root}|g" /etc/cron.d/az-wp-cron
+    fi
 
-    # 6. Update state file
-    log_sub "Updating state file..."
-    state_set "DOMAIN" "$new_domain"
-    DOMAIN="$new_domain"
-
-    # 7. Update WP cache salt
-    wp_run config set WP_CACHE_KEY_SALT "${new_domain}_" > /dev/null
+    # === Step 7: Cache ===
+    log_sub "7/9 Flushing caches..."
+    rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
     redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
+    wp_run config set WP_CACHE_KEY_SALT "${new_domain}_" > /dev/null
 
-    # Reload
+    # Update cache-stats.json path reference
+    local stats_file="/home/${SITE_USER}/cache/cache-stats.json"
+    [[ -f "$stats_file" ]] && printf '{"files":0,"size":0,"updated":"%s"}' "$(date '+%Y-%m-%d %H:%M:%S')" > "$stats_file"
+
+    # Update cache-stats cron if exists
+    if [[ -f /etc/cron.d/az-wp-cache-stats ]]; then
+        sed -i "s|${old_web_root}|${new_web_root}|g" /etc/cron.d/az-wp-cache-stats 2>/dev/null || true
+    fi
+
+    # === Step 8: Update WordPress config ===
+    log_sub "8/9 Updating wp-config.php..."
+    # Update open_basedir path in PHP ini (if web root changed)
+    if [[ "$old_web_root" != "$new_web_root" ]]; then
+        local php_ini="/etc/php/${PHP_VERSION}/fpm/conf.d/99-az-wp.ini"
+        if [[ -f "$php_ini" ]]; then
+            sed -i "s|${old_web_root}|${new_web_root}|g" "$php_ini" 2>/dev/null || true
+        fi
+        systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
+    fi
+
+    # Update plugin cache_path setting
+    wp_run option patch update acms_general_settings cache_path "${CACHE_PATH}/" > /dev/null 2>/dev/null || true
+
+    # === Step 9: State file ===
+    log_sub "9/9 Updating state file..."
+    state_set "DOMAIN" "$new_domain"
+    state_set "WEB_ROOT" "$new_web_root"
+    DOMAIN="$new_domain"
+    WEB_ROOT="$new_web_root"
+
+    # Reload nginx
     if nginx -t 2>/dev/null; then
         systemctl reload nginx
     else
-        log_warn "Nginx config error. Check: nginx -t"
+        log_warn "Nginx config error. Run: nginx -t"
     fi
 
     printf "\n"
