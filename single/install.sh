@@ -517,9 +517,12 @@ print_summary() {
     printf "\n${BOLD}  Verification:${NC}\n"
     printf "  ──────────────────────────────────────\n"
 
-    # Website
+    # Website (try HTTPS first, fallback to HTTP)
     local http_code
-    http_code="$(curl -sfk --resolve "${DOMAIN}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${DOMAIN}/" 2>/dev/null || curl -sf -o /dev/null -w '%{http_code}' "http://${DOMAIN}/" 2>/dev/null)" || http_code="000"
+    http_code="$(curl -sfk --resolve "${DOMAIN}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${DOMAIN}/" 2>/dev/null)" || true
+    if [[ "$http_code" == "000" || -z "$http_code" ]]; then
+        http_code="$(curl -sf --resolve "${DOMAIN}:80:127.0.0.1" -o /dev/null -w '%{http_code}' "http://${DOMAIN}/" 2>/dev/null)" || http_code="000"
+    fi
     if [[ "$http_code" == "200" || "$http_code" == "301" || "$http_code" == "302" ]]; then
         printf "  ${GREEN}OK${NC}  Website       https://%s (HTTP %s)\n" "$DOMAIN" "$http_code"
     else
