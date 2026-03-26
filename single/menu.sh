@@ -874,6 +874,16 @@ menu_cron() {
             # Strip ALL redirects so we see output
             cmd="$(printf '%s' "$cmd" | sed 's|>>* *[^ ]*||g; s|2>&1||g; s|> */dev/null||g')"
             cmd="${cmd% }"
+
+            # Auto-replace invalid/test tokens with real API token
+            if [[ "$cmd" == *"token="* ]]; then
+                local real_token
+                real_token="$(wp_run option get acms_api_token 2>/dev/null | tr -d '[:space:]')" || real_token=""
+                if [[ -n "$real_token" ]]; then
+                    cmd="$(printf '%s' "$cmd" | sed "s|token=[^\"&]*|token=${real_token}|g")"
+                fi
+            fi
+
             printf "  ${DIM}Command:${NC} %s\n\n" "$cmd"
             printf "  ${BOLD}Output:${NC}\n"
             eval "$cmd" 2>&1 | head -30 | sed 's/^/  /'
