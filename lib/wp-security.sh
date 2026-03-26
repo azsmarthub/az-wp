@@ -22,6 +22,10 @@ install_security_tools() {
         pip3 install --break-system-packages wordfence > /dev/null 2>&1 || \
             pip3 install wordfence > /dev/null 2>&1 || \
             log_warn "Wordfence CLI install failed (optional — scan will use checksums only)"
+        # Accept Wordfence free license non-interactively
+        if command -v wordfence >/dev/null 2>&1; then
+            echo "y" | wordfence configure --accept-terms > /dev/null 2>&1 || true
+        fi
     else
         log_warn "pip3 not available — Wordfence CLI skipped"
     fi
@@ -168,17 +172,21 @@ case "${1:-daily}" in
         # --- Tier 3: Wordfence malware scan ---
         log "--- Tier 3: Wordfence Malware Scan ---"
         if command -v wordfence >/dev/null 2>&1; then
-            wordfence malware-scan "$WEB_ROOT" \
-                --output-path "$LOG_DIR/wordfence-${DATE}.txt" \
-                2>> "$LOG_FILE" || true
-
-            if [[ -f "$LOG_DIR/wordfence-${DATE}.txt" ]]; then
-                malware_count=$(wc -l < "$LOG_DIR/wordfence-${DATE}.txt" 2>/dev/null || echo "0")
+            # Check if Wordfence is configured (requires license acceptance)
+            # Accept license non-interactively, then scan
+            echo "n" | wordfence configure >/dev/null 2>&1 || true
+            if wordfence malware-scan "$WEB_ROOT" \
+                    --output-path "$LOG_DIR/wordfence-${DATE}.txt" \
+                    --accept-terms 2>> "$LOG_FILE"; then
+                malware_count="$(wc -l < "$LOG_DIR/wordfence-${DATE}.txt" 2>/dev/null | tr -d '[:space:]')"
+                malware_count="${malware_count:-0}"
                 if [[ "$malware_count" -gt 0 ]]; then
                     alert "Wordfence found $malware_count potential threats! See: $LOG_DIR/wordfence-${DATE}.txt"
                 else
                     log "Wordfence: no malware found"
                 fi
+            else
+                log "Wordfence scan failed or not configured (run: wordfence configure)"
             fi
         else
             log "Wordfence CLI not installed (skipped)"
