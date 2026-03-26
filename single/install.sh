@@ -335,6 +335,12 @@ step_wordpress() {
             sed -i "s|https://cdn.productreviews.org/logo.png|/wp-content/uploads/2026/02/logo.png|g" "$theme_config"
         fi
 
+        # Fix hardcoded FPM pool name in CachePreload
+        local cache_preload="$WEB_ROOT/wp-content/plugins/affiliatecms-pro/src/Core/CachePreload.php"
+        if [[ -f "$cache_preload" ]]; then
+            sed -i "s|pool productreviewsorg|pool ${SITE_USER}|g" "$cache_preload"
+        fi
+
         log_sub "Search & replace domain..."
         # Replace original production domain
         sudo -u "$SITE_USER" wp search-replace 'productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
