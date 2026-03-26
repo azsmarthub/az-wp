@@ -19,9 +19,7 @@ install_security_tools() {
     log_sub "Installing WP-CLI doctor..."
     sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --path="$WEB_ROOT" > /dev/null 2>&1 || true
 
-    # Note: Wordfence CLI v5.x incompatible with Python 3.12 (Ubuntu 24.04)
-    # PcrePattern import error — bug in their code, no workaround
-    # Tier 1+2 (checksums + doctor + file checks) provide sufficient coverage
+    # Tier 3 uses built-in grep malware pattern scan (no external dependencies)
 
     # Telegram alerts — no extra packages needed (uses curl)
 
@@ -46,7 +44,7 @@ create_scan_script() {
 # az-wp Security Scanner — runs via cron
 # Tier 1: WP core + plugin checksum (daily, <5s)
 # Tier 2: WP doctor health check (weekly, <10s)
-# Tier 3: Wordfence malware scan (weekly, 1-5min)
+# Tier 3: PHP malware pattern scan (weekly, <5s)
 
 set -uo pipefail
 
@@ -233,7 +231,7 @@ EOF
 
     # Weekly scan: full scan + wordfence malware (Sunday 4:00 AM)
     cat > /etc/cron.d/az-wp-security-weekly <<EOF
-# az-wp: weekly security scan (checksums + doctor + wordfence)
+# az-wp: weekly security scan (checksums + doctor + malware patterns)
 0 4 * * 0 root $AZ_SECURITY_SCRIPT weekly > /dev/null 2>&1
 EOF
     chmod 644 /etc/cron.d/az-wp-security-weekly

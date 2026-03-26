@@ -478,7 +478,7 @@ step_security() {
     setup_fail2ban
     harden_all
 
-    # Security scanning (WP checksums + Wordfence CLI)
+    # Security scanning (WP checksums + malware patterns)
     if [[ -f "$AZ_DIR/lib/wp-security.sh" ]]; then
         source "$AZ_DIR/lib/wp-security.sh"
         install_security_tools
