@@ -23,13 +23,13 @@
 
 // ** Database settings - You can get this info from your web host ** //
 /** The name of the database for WordPress */
-define( 'DB_NAME', 'CLONE_DB_USER' );
+define( 'DB_NAME', '{{DB_NAME}}' );
 
 /** Database username */
-define( 'DB_USER', 'CLONE_DB_USER' );
+define( 'DB_USER', '{{DB_USER}}' );
 
 /** Database password */
-define( 'DB_PASSWORD', 'CLONE_DB_PASS' );
+define( 'DB_PASSWORD', '{{DB_PASSWORD}}' );
 
 /** Database hostname */
 define( 'DB_HOST', 'localhost' );
@@ -96,7 +96,7 @@ define( 'WP_DEBUG_LOG', true );
 define( 'WP_REDIS_SCHEME', 'unix' );
 define( 'WP_REDIS_PATH', '/run/redis/redis-server.sock' );
 define( 'WP_REDIS_DATABASE', 0 );
-define( 'WP_CACHE_KEY_SALT', 'CLONE_DOMAIN_' );
+define( 'WP_CACHE_KEY_SALT', '{{DOMAIN}}_' );
 /* That's all, stop editing! Happy publishing. */
 
 /** Absolute path to the WordPress directory. */
