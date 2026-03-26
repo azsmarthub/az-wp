@@ -20,6 +20,26 @@ server {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+
+    # Block sensitive files
+    location = /wp-config.php { deny all; }
+    location ~ /\.(env|git|svn|htaccess|htpasswd) { deny all; }
+    location ~ /readme\.(html|txt)$ { deny all; }
+    location ~ /license\.txt$ { deny all; }
+
+    # Block user enumeration via REST API
+    location ~ ^/wp-json/wp/v2/users {
+        if ($arg_context != "edit") { return 403; }
+        # Allow only authenticated edit context (WP admin needs this)
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
+    }
+
+    # Block author enumeration (?author=N)
+    if ($args ~* "author=\d+") { return 403; }
 
     # === FastCGI Cache Logic ===
     set $skip_cache 0;
