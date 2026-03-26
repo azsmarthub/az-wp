@@ -1062,7 +1062,7 @@ _cron_install_preset() {
         "queue-monitor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Category queue monitor"
         "product-ai|*/10 * * * *|/wp-json/acms/v1/cron/product-ai|30|GET|Product AI generation"
         "post-ai|*/10 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI generation"
-        "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/process-category-ai|30|GET|Category AI"
+        "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/category-ai|60|GET|Category AI"
         "brand-ai|*/10 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI generation"
         "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
         "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|60|GET|Quick price update"
