@@ -1842,7 +1842,7 @@ This is a test message from az-wp security scanner."
                 -H "Content-Type: application/json" \
                 -d "{\"rules\":[{\"expression\":\"(http.host eq \\\"${DOMAIN}\\\")\",\"description\":\"az-wp-cache: Cache all for ${DOMAIN}\",\"action\":\"set_cache_settings\",\"action_parameters\":{\"cache\":true,\"edge_ttl\":{\"mode\":\"override_origin\",\"default\":86400},\"browser_ttl\":{\"mode\":\"override_origin\",\"default\":600}}}]}" 2>/dev/null)" || true
 
-            if echo "$rule_response" | grep -q '"success":true'; then
+            if echo "$rule_response" | grep -q '"success":true\|"success": true'; then
                 config_set "CF_EMAIL" "$cf_email"
                 config_set "CF_API_KEY" "$cf_key"
                 config_set "CF_ZONE_ID" "$cf_zone"
