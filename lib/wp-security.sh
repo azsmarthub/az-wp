@@ -35,9 +35,7 @@ install_security_tools() {
     log_sub "Installing WP-CLI doctor..."
     sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --path="$WEB_ROOT" > /dev/null 2>&1 || true
 
-    # Install mail utilities (optional)
-    log_sub "Installing mail tools (email alerts)..."
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y msmtp msmtp-mta mailutils > /dev/null 2>&1 || true
+    # Telegram alerts — no extra packages needed (uses curl)
 
     # Create log directory
     mkdir -p "$AZ_SECURITY_LOG_DIR"
@@ -87,13 +85,12 @@ alert() { ISSUES_FOUND=$((ISSUES_FOUND + 1)); REPORT="${REPORT}\n⚠ $1"; log "A
 
 mkdir -p "$LOG_DIR"
 
-# Get alert email: custom config > WP admin email
-ADMIN_EMAIL=""
+# Telegram alert config
+TG_BOT_TOKEN=""
+TG_CHAT_ID=""
 if [[ -f /etc/az-wp/config ]]; then
-    ADMIN_EMAIL=$(grep "^SECURITY_ALERT_EMAIL=" /etc/az-wp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
-fi
-if [[ -z "$ADMIN_EMAIL" ]]; then
-    ADMIN_EMAIL=$(sudo -u "$SITE_USER" wp option get admin_email --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated | tr -d '[:space:]') || ADMIN_EMAIL=""
+    TG_BOT_TOKEN=$(grep "^TG_BOT_TOKEN=" /etc/az-wp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
+    TG_CHAT_ID=$(grep "^TG_CHAT_ID=" /etc/az-wp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
 fi
 
 log "=== Security Scan Started ==="
@@ -204,32 +201,35 @@ esac
 
 log "=== Scan Complete: $ISSUES_FOUND issues found ==="
 
-# --- Send email alert if issues found ---
-if [[ "$ISSUES_FOUND" -gt 0 && -n "$ADMIN_EMAIL" ]]; then
-    # Rate limit: max 1 alert email per 6 hours
+# --- Send Telegram alert if issues found ---
+if [[ "$ISSUES_FOUND" -gt 0 && -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]]; then
+    # Rate limit: max 1 alert per 6 hours
     if [[ -f "$ALERT_FILE" ]]; then
         last_alert=$(cat "$ALERT_FILE" 2>/dev/null || echo "0")
         now=$(date +%s)
         if [[ $((now - last_alert)) -lt 21600 ]]; then
-            log "Alert email skipped (rate limit: 1 per 6h)"
+            log "Telegram alert skipped (rate limit: 1 per 6h)"
             exit 0
         fi
     fi
 
-    SUBJECT="[az-wp] Security Alert: $DOMAIN — $ISSUES_FOUND issues"
-    BODY="Security scan found $ISSUES_FOUND issue(s) on $DOMAIN at $TIMESTAMP\n\n${REPORT}\n\nFull log: $LOG_FILE\n\n---\naz-wp Security Scanner"
+    TG_MSG="🔒 *az-wp Security Alert*
+🌐 \`${DOMAIN}\`
+⏰ ${TIMESTAMP}
+⚠️ ${ISSUES_FOUND} issue(s) found
+$(printf "$REPORT")
 
-    if command -v mail >/dev/null 2>&1; then
-        printf "$BODY" | mail -s "$SUBJECT" "$ADMIN_EMAIL" 2>/dev/null && \
-            log "Alert email sent to $ADMIN_EMAIL"
-    elif command -v sendmail >/dev/null 2>&1; then
-        printf "Subject: $SUBJECT\nTo: $ADMIN_EMAIL\n\n$BODY" | sendmail "$ADMIN_EMAIL" 2>/dev/null && \
-            log "Alert email sent to $ADMIN_EMAIL"
-    else
-        log "No mail command available — alert logged only"
-    fi
+📄 Log: \`${LOG_FILE}\`"
+
+    curl -sf -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TG_CHAT_ID}" \
+        -d "text=${TG_MSG}" \
+        -d "parse_mode=Markdown" \
+        > /dev/null 2>&1 && log "Telegram alert sent" || log "Telegram alert failed"
 
     date +%s > "$ALERT_FILE"
+elif [[ "$ISSUES_FOUND" -gt 0 ]]; then
+    log "No Telegram configured — alert logged only. Setup: az-wp advanced security alert-telegram"
 fi
 
 # Cleanup old logs (keep 30 days)

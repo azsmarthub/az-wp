@@ -1422,28 +1422,31 @@ _advanced_action() {
             local sec_sub="${2:-}"
             if [[ -z "$sec_sub" ]]; then
                 _header "Security"
-                # Show current alert email
-                local alert_email
-                alert_email="$(config_get SECURITY_ALERT_EMAIL 2>/dev/null)" || alert_email=""
-                if [[ -z "$alert_email" ]]; then
-                    alert_email="$(wp_run option get admin_email 2>/dev/null | tr -d '[:space:]')" || alert_email="(admin email)"
+                # Show Telegram alert status
+                local tg_token tg_chat
+                tg_token="$(config_get TG_BOT_TOKEN 2>/dev/null)" || tg_token=""
+                tg_chat="$(config_get TG_CHAT_ID 2>/dev/null)" || tg_chat=""
+                if [[ -n "$tg_token" && -n "$tg_chat" ]]; then
+                    printf "  ${GREEN}Telegram alerts: configured${NC}\n\n"
+                else
+                    printf "  ${DIM}Telegram alerts: not configured${NC}\n\n"
                 fi
-                printf "  ${DIM}Alert email: %s${NC}\n\n" "$alert_email"
 
                 printf "  1) Run security scan (quick)\n"
                 printf "  2) Run full scan (checksums + malware)\n"
                 printf "  3) View scan logs\n"
-                printf "  4) Change alert email\n"
-                printf "  5) Fail2Ban status\n"
-                printf "  6) Unban IP\n"
-                printf "  7) UFW status\n"
+                printf "  4) Setup Telegram alerts\n"
+                printf "  5) Test Telegram alert\n"
+                printf "  6) Fail2Ban status\n"
+                printf "  7) Unban IP\n"
+                printf "  8) UFW status\n"
                 printf "  0) Back\n\n"
                 read -rp "  Choose: " sec_sub
                 case "$sec_sub" in
                     1) sec_sub="scan-daily" ;; 2) sec_sub="scan-weekly" ;;
-                    3) sec_sub="scan-logs" ;; 4) sec_sub="alert-email" ;;
-                    5) sec_sub="f2b-status" ;; 6) sec_sub="unban" ;;
-                    7) sec_sub="ufw" ;; *) return 0 ;;
+                    3) sec_sub="scan-logs" ;; 4) sec_sub="telegram-setup" ;;
+                    5) sec_sub="telegram-test" ;; 6) sec_sub="f2b-status" ;;
+                    7) sec_sub="unban" ;; 8) sec_sub="ufw" ;; *) return 0 ;;
                 esac
             fi
             case "$sec_sub" in
@@ -1480,19 +1483,57 @@ _advanced_action() {
                         printf "  No scan logs yet.\n"
                     fi
                     ;;
-                alert-email)
-                    local current_email
-                    current_email="$(config_get SECURITY_ALERT_EMAIL 2>/dev/null)" || current_email=""
-                    if [[ -z "$current_email" ]]; then
-                        current_email="$(wp_run option get admin_email 2>/dev/null | tr -d '[:space:]')" || current_email=""
+                telegram-setup)
+                    _header "Telegram Alert Setup"
+                    printf "  ${BOLD}How to get Bot Token:${NC}\n"
+                    printf "  1. Open Telegram, search @BotFather\n"
+                    printf "  2. Send /newbot, follow instructions\n"
+                    printf "  3. Copy the token (e.g. 123456:ABC-DEF...)\n\n"
+                    printf "  ${BOLD}How to get Chat ID:${NC}\n"
+                    printf "  1. Send a message to your bot\n"
+                    printf "  2. Open: https://api.telegram.org/bot<TOKEN>/getUpdates\n"
+                    printf "  3. Find \"chat\":{\"id\":XXXXXXX}\n\n"
+
+                    local cur_token cur_chat
+                    cur_token="$(config_get TG_BOT_TOKEN 2>/dev/null)" || cur_token=""
+                    cur_chat="$(config_get TG_CHAT_ID 2>/dev/null)" || cur_chat=""
+
+                    local new_token new_chat
+                    read -rp "  Bot Token (ENTER to keep ${cur_token:+current}${cur_token:-empty}): " new_token
+                    [[ -n "$new_token" ]] && config_set "TG_BOT_TOKEN" "$new_token" && cur_token="$new_token"
+                    read -rp "  Chat ID  (ENTER to keep ${cur_chat:+current}${cur_chat:-empty}): " new_chat
+                    [[ -n "$new_chat" ]] && config_set "TG_CHAT_ID" "$new_chat" && cur_chat="$new_chat"
+
+                    if [[ -n "$cur_token" && -n "$cur_chat" ]]; then
+                        # Regenerate scan script with new config
+                        if [[ -f "$AZ_DIR/lib/wp-security.sh" ]]; then
+                            source "$AZ_DIR/lib/wp-security.sh"
+                            create_scan_script "$SITE_USER" "$WEB_ROOT" "$DOMAIN"
+                        fi
+                        log_success "Telegram configured. Run test: az-wp advanced security telegram-test"
+                    else
+                        log_warn "Both Token and Chat ID required."
                     fi
-                    printf "  Current: %s\n" "${current_email:-not set}"
-                    printf "  ${DIM}Default: WP admin email (user ID 1)${NC}\n\n"
-                    local new_email
-                    read -rp "  New alert email (ENTER to keep current): " new_email
-                    if [[ -n "$new_email" ]]; then
-                        config_set "SECURITY_ALERT_EMAIL" "$new_email"
-                        log_success "Alert email set to: $new_email"
+                    ;;
+                telegram-test)
+                    local tg_token tg_chat
+                    tg_token="$(config_get TG_BOT_TOKEN 2>/dev/null)" || tg_token=""
+                    tg_chat="$(config_get TG_CHAT_ID 2>/dev/null)" || tg_chat=""
+                    if [[ -z "$tg_token" || -z "$tg_chat" ]]; then
+                        log_warn "Telegram not configured. Run: az-wp advanced security telegram-setup"
+                        return 0
+                    fi
+                    local test_msg="✅ *az-wp Test Alert*
+🌐 \`${DOMAIN}\`
+⏰ $(date '+%Y-%m-%d %H:%M:%S')
+This is a test message from az-wp security scanner."
+                    if curl -sf -X POST "https://api.telegram.org/bot${tg_token}/sendMessage" \
+                        -d "chat_id=${tg_chat}" \
+                        -d "text=${test_msg}" \
+                        -d "parse_mode=Markdown" > /dev/null 2>&1; then
+                        log_success "Test message sent! Check your Telegram."
+                    else
+                        log_error "Failed to send. Check Token and Chat ID."
                     fi
                     ;;
                 f2b-status) fail2ban-client status 2>/dev/null; for jail in $(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*://;s/,/ /g'); do printf "\n"; fail2ban-client status "$jail" 2>/dev/null; done ;;
