@@ -463,6 +463,8 @@ CSCRON
 # Step 8: SSL
 # ---------------------------------------------------------------------------
 step_ssl() {
+    # Clear stale certbot accounts (prevents "Account not found" on fresh VPS)
+    rm -rf /etc/letsencrypt/accounts/ 2>/dev/null || true
     install_certbot
     issue_certificate
     setup_ssl_renewal
