@@ -140,6 +140,10 @@ server {
         fastcgi_cache_lock on;
         fastcgi_cache_lock_timeout 5s;
         add_header X-FastCGI-Cache $upstream_cache_status;
+
+        # Standard cache headers (for WordPress Health Check detection)
+        add_header Cache-Control "public, max-age=86400" always;
+        add_header X-Cache-Enabled "true" always;
     }
 
     # Rate limit wp-login.php
