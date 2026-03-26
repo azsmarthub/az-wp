@@ -9,12 +9,12 @@ _AZ_PHP_LOADED=1
 install_php() {
     log_sub "Adding Ondrej PHP PPA..."
     add-apt-repository ppa:ondrej/php -y 2>&1 | grep -E "^(Adding|More info)" | head -2
-    apt-get update -qq 2>/dev/null
+    apt_wait; apt-get update -qq 2>/dev/null
 
     log_sub "Installing PHP ${PHP_VERSION} + extensions (this may take 1-2 minutes)..."
     # Note: fileinfo, exif, iconv, opcache are built into php-common
     # mysqli is packaged as php-mysql
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    apt_install \
         "php${PHP_VERSION}-fpm" \
         "php${PHP_VERSION}-cli" \
         "php${PHP_VERSION}-curl" \
@@ -28,8 +28,7 @@ install_php() {
         "php${PHP_VERSION}-soap" \
         "php${PHP_VERSION}-bcmath" \
         "php${PHP_VERSION}-redis" \
-        "php${PHP_VERSION}-igbinary" \
-        > /dev/null 2>&1
+        "php${PHP_VERSION}-igbinary"
 
     systemctl enable "php${PHP_VERSION}-fpm" 2>/dev/null
 

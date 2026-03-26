@@ -33,7 +33,7 @@ harden_ssh() {
 # Unattended Upgrades
 # ---------------------------------------------------------------------------
 setup_unattended_upgrades() {
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades > /dev/null 2>&1
+    apt_install unattended-upgrades
 
     local conf="/etc/apt/apt.conf.d/20auto-upgrades"
 

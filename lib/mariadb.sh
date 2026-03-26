@@ -17,8 +17,8 @@ install_mariadb() {
         "$codename" > /etc/apt/sources.list.d/mariadb.list
 
     log_sub "Installing MariaDB server + client..."
-    apt-get update -qq 2>/dev/null
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server mariadb-client > /dev/null 2>&1
+    apt_wait; apt-get update -qq 2>/dev/null
+    apt_install mariadb-server mariadb-client
 
     systemctl enable mariadb 2>/dev/null
 

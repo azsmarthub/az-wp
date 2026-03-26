@@ -17,7 +17,7 @@ install_security_tools() {
 
     # Install pip3 + Wordfence CLI (all optional — won't crash if fail)
     log_sub "Installing Wordfence CLI (optional)..."
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python3-venv > /dev/null 2>&1 || true
+    apt_install python3-pip python3-venv || true
     if command -v pip3 >/dev/null 2>&1; then
         pip3 install --break-system-packages wordfence > /dev/null 2>&1 || \
             pip3 install wordfence > /dev/null 2>&1 || \

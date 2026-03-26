@@ -9,7 +9,7 @@ _AZ_REDIS_LOADED=1
 install_redis() {
     log_sub "Installing Redis..."
 
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server > /dev/null 2>&1
+    apt_install redis-server
 
     systemctl enable redis-server
 

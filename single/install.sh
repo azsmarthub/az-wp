@@ -200,16 +200,17 @@ step_system_prep() {
     fi
     update-locale LANG=en_US.UTF-8 > /dev/null 2>&1 || true
 
+    log_sub "Waiting for system package manager..."
+    apt_wait
     log_sub "Updating package lists..."
     apt-get update -qq 2>&1 | tail -1 || true
     log_sub "Upgrading system packages (this may take a few minutes)..."
+    apt_wait
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -q 2>&1 | grep -E "^(Get|Fetched|Reading|Unpacking|Setting up|[0-9]+ upgraded)" | tail -5 || true
 
     log_sub "Installing base packages (curl, git, htop, etc.)..."
-    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-        curl wget gnupg software-properties-common unzip git bc \
-        htop ncdu logrotate apt-transport-https ca-certificates lsb-release \
-        2>&1 | grep -E "^(Setting up|[0-9]+ newly)" | tail -3 || true
+    apt_install curl wget gnupg software-properties-common unzip git bc \
+        htop ncdu logrotate apt-transport-https ca-certificates lsb-release
 
     if ! swapon --show | grep -q '/'; then
         local swap_mb="${TUNE_SWAP_SIZE:-1024}"

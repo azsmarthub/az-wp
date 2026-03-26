@@ -284,6 +284,33 @@ render_template() {
 }
 
 # ---------------------------------------------------------------------------
+# Wait for apt lock (Ubuntu auto-updates may hold lock on fresh VPS)
+# ---------------------------------------------------------------------------
+apt_wait() {
+    local max_wait=120
+    local waited=0
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+          fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        if [[ $waited -eq 0 ]]; then
+            log_sub "Waiting for apt lock (another process is updating)..."
+        fi
+        sleep 5
+        waited=$((waited + 5))
+        if [[ $waited -ge $max_wait ]]; then
+            log_warn "apt lock timeout after ${max_wait}s — proceeding anyway"
+            break
+        fi
+    done
+}
+
+# Wrapper: wait for lock then run apt-get
+apt_install() {
+    apt_wait
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" > /dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
 # Service management
 # ---------------------------------------------------------------------------
 service_reload() {
