@@ -37,4 +37,5 @@ realpath_cache_ttl = 600
 ; for cache management (ps, find, nginx-cache-purge)
 disable_functions = passthru,shell_exec,system,proc_open,popen
 ; Include parent home dir for cache access (/home/user/cache/)
-open_basedir = ${SITE_HOME}:/tmp:/usr/share/php:/run/redis
+; /etc/azwp: read azwp config (Cloudflare credentials for cache purge)
+open_basedir = ${SITE_HOME}:/tmp:/usr/share/php:/run/redis:/etc/azwp

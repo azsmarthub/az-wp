@@ -46,7 +46,7 @@ server {
 
     if ($request_method = POST) { set $skip_cache 1; }
     if ($query_string != "") { set $skip_cache 1; }
-    if ($request_uri ~* "/wp-admin/|/wp-json/|/xmlrpc.php|wp-.*.php|/feed/") {
+    if ($request_uri ~* "/wp-admin/|/wp-json/|/xmlrpc.php|wp-.*.php|/feed/|/sitemap.*\.xml") {
         set $skip_cache 1;
     }
     if ($http_cookie ~* "wordpress_logged_in|comment_author|woocommerce_") {
@@ -92,6 +92,7 @@ server {
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-workers.sock;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_read_timeout 300;
+        fastcgi_cache off;
     }
 
     # Action Scheduler AJAX → workers pool
@@ -107,6 +108,7 @@ server {
         fastcgi_read_timeout 300;
         fastcgi_buffers 16 16k;
         fastcgi_buffer_size 32k;
+        fastcgi_cache off;
     }
 
     # API dispatchers → web pool

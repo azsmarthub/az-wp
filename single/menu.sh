@@ -119,6 +119,27 @@ _refresh_cache_stats() {
     chown "${SITE_USER}:${SITE_USER}" "$stats_file" 2>/dev/null || true
 }
 
+_purge_cloudflare() {
+    local cf_zone cf_email cf_key
+    cf_email="$(config_get CF_EMAIL 2>/dev/null)" || cf_email=""
+    cf_key="$(config_get CF_API_KEY 2>/dev/null)" || cf_key=""
+    cf_zone="$(config_get CF_ZONE_ID 2>/dev/null)" || cf_zone=""
+    if [[ -z "$cf_zone" || -z "$cf_email" || -z "$cf_key" ]]; then
+        printf "  ${DIM}Cloudflare not configured — skipped. Run: azwp advanced cloudflare${NC}\n"
+        return 0
+    fi
+    local response
+    response="$(curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/${cf_zone}/purge_cache" \
+        -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
+        -H "Content-Type: application/json" \
+        -d '{"purge_everything":true}' 2>/dev/null)" || response=""
+    if echo "$response" | grep -q '"success":true\|"success": true'; then
+        log_success "Cloudflare edge cache purged."
+    else
+        log_warn "Cloudflare purge failed. Check credentials: azwp advanced cloudflare"
+    fi
+}
+
 
 # ===========================================================================
 # MAIN MENU
@@ -131,7 +152,7 @@ show_menu() {
     printf "  1) Status        System + services overview\n"
     printf "  2) WordPress     Update, plugins, debug, maintenance\n"
     printf "  3) Database      phpMyAdmin, optimize, credentials\n"
-    printf "  4) Cache         Purge FastCGI + Redis\n"
+    printf "  4) Cache         Purge FastCGI + Redis + Cloudflare\n"
     printf "  5) Backup        Full backup, restore, schedule\n"
     printf "  6) Cron          Manage cron jobs\n"
     printf "  7) Domain        Change domain\n"
@@ -402,16 +423,18 @@ menu_cache() {
     local sub="${1:-}"
     if [[ -z "$sub" ]]; then
         _header "Cache Management"
-        printf "  1) Purge all (FastCGI + Redis + OPcache)\n"
+        printf "  1) Purge all (FastCGI + Redis + OPcache + Cloudflare)\n"
         printf "  2) Purge FastCGI only\n"
         printf "  3) Purge Redis only\n"
         printf "  4) Purge OPcache (restart PHP-FPM)\n"
-        printf "  5) Cache stats\n"
+        printf "  5) Purge Cloudflare only\n"
+        printf "  6) Cache stats\n"
         printf "  0) Back\n\n"
         read -rp "  Choose: " sub
         case "$sub" in
             1) sub="purge" ;; 2) sub="purge-fcgi" ;; 3) sub="purge-redis" ;;
-            4) sub="purge-opcache" ;; 5) sub="stats" ;; *) return 0 ;;
+            4) sub="purge-opcache" ;; 5) sub="purge-cf" ;; 6) sub="stats" ;;
+            *) return 0 ;;
         esac
     fi
 
@@ -421,7 +444,8 @@ menu_cache() {
             redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
             systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
             _refresh_cache_stats
-            log_success "FastCGI + Redis + OPcache purged."
+            _purge_cloudflare
+            log_success "All caches purged (FastCGI + Redis + OPcache + Cloudflare)."
             ;;
         purge-fcgi)
             rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
@@ -435,6 +459,9 @@ menu_cache() {
         purge-opcache)
             systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
             log_success "OPcache purged (PHP-FPM restarted)."
+            ;;
+        purge-cf)
+            _purge_cloudflare
             ;;
         stats)
             local fcgi_size; fcgi_size="$(du -sh "$CACHE_PATH" 2>/dev/null | awk '{print $1}')" || fcgi_size="0"
@@ -1149,35 +1176,37 @@ menu_domain() {
     local new_web_root="/home/${SITE_USER}/${new_domain}"
 
     printf "\n  ${BOLD}Changes:${NC}\n"
-    printf "    Domain:    %s → %s\n" "$old_domain" "$new_domain"
-    printf "    Web root:  %s → %s\n" "$old_web_root" "$new_web_root"
-    printf "    Database:  search & replace all URLs\n"
-    printf "    Nginx:     new server_name + config file\n"
-    printf "    SSL:       new certificate\n"
-    printf "    Cron:      update all domain references\n"
-    printf "    Cache:     flush all + update paths\n\n"
+    printf "    Domain:      %s → %s\n" "$old_domain" "$new_domain"
+    printf "    Web root:    %s → %s\n" "$old_web_root" "$new_web_root"
+    printf "    Database:    search & replace all URLs\n"
+    printf "    Nginx:       new server_name + config file\n"
+    printf "    SSL:         new certificate\n"
+    printf "    Cron:        update all domain references\n"
+    printf "    Cache:       flush FastCGI + Redis + OPcache + preload queue\n"
+    printf "    Security:    update scanner domain\n"
+    printf "    Cloudflare:  update cache rule (if configured)\n\n"
 
     confirm "Proceed with domain change?" || return 0
 
     # === Step 1: Database search & replace ===
-    log_sub "1/9 Replacing in database: $old_domain → $new_domain ..."
+    log_sub "1/12 Replacing in database: $old_domain → $new_domain ..."
     wp_run search-replace "$old_domain" "$new_domain" --all-tables --precise > /dev/null
     wp_run search-replace "http://$old_domain" "https://$new_domain" --all-tables --precise > /dev/null
 
     # === Step 2: WordPress URLs ===
-    log_sub "2/9 Updating WordPress site URL..."
+    log_sub "2/12 Updating WordPress site URL..."
     wp_run option update siteurl "https://$new_domain" > /dev/null
     wp_run option update home "https://$new_domain" > /dev/null
 
     # === Step 3: Rename web root directory ===
-    log_sub "3/9 Renaming web root..."
+    log_sub "3/12 Renaming web root..."
     if [[ "$old_web_root" != "$new_web_root" && -d "$old_web_root" ]]; then
         mv "$old_web_root" "$new_web_root"
         WEB_ROOT="$new_web_root"
     fi
 
     # === Step 4: Nginx config (re-render from template — safer than sed) ===
-    log_sub "4/9 Rebuilding Nginx configuration..."
+    log_sub "4/12 Rebuilding Nginx configuration..."
     local new_conf="/etc/nginx/sites-available/${new_domain}.conf"
 
     export DOMAIN="$new_domain" WEB_ROOT="$new_web_root" PHP_VERSION
@@ -1197,14 +1226,14 @@ menu_domain() {
     nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null
 
     # === Step 5: SSL certificate ===
-    log_sub "5/9 Issuing new SSL certificate..."
+    log_sub "5/12 Issuing new SSL certificate..."
     PUBLIC_IP="$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null)" || PUBLIC_IP=""
     DOMAIN="$new_domain"
     WP_ADMIN_EMAIL="$(state_get WP_ADMIN_EMAIL 2>/dev/null)" || true
     issue_certificate 2>/dev/null || log_warn "SSL issue failed. Run 'azwp advanced ssl issue' later."
 
     # === Step 6: Cron jobs ===
-    log_sub "6/9 Updating cron jobs..."
+    log_sub "6/12 Updating cron jobs..."
     for f in /etc/cron.d/azwp-*; do
         [[ -f "$f" ]] && sed -i "s|${old_domain}|${new_domain}|g" "$f"
     done
@@ -1214,10 +1243,15 @@ menu_domain() {
     fi
 
     # === Step 7: Cache ===
-    log_sub "7/9 Flushing caches..."
+    log_sub "7/12 Flushing caches..."
     rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
     redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
     wp_run config set WP_CACHE_KEY_SALT "${new_domain}_" > /dev/null
+
+    # Clear preload queue (contains old domain URLs)
+    local preload_queue="${new_web_root}/wp-content/uploads/acms-preload-queue.txt"
+    rm -f "$preload_queue" 2>/dev/null || true
+    wp_run option delete acms_preload_meta > /dev/null 2>/dev/null || true
 
     # Regenerate cache-stats.json with real data
     _refresh_cache_stats
@@ -1228,21 +1262,65 @@ menu_domain() {
     fi
 
     # === Step 8: Update WordPress config ===
-    log_sub "8/9 Updating wp-config.php..."
+    log_sub "8/12 Updating wp-config.php..."
     # Update open_basedir path in PHP ini (if web root changed)
     if [[ "$old_web_root" != "$new_web_root" ]]; then
         local php_ini="/etc/php/${PHP_VERSION}/fpm/conf.d/99-azwp.ini"
         if [[ -f "$php_ini" ]]; then
             sed -i "s|${old_web_root}|${new_web_root}|g" "$php_ini" 2>/dev/null || true
         fi
-        systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
     fi
+
+    # Reset OPcache (stale bytecode may reference old paths)
+    systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
 
     # Update plugin cache_path setting
     wp_run option patch update acms_general_settings cache_path "${CACHE_PATH}/" > /dev/null 2>/dev/null || true
 
-    # === Step 9: State file ===
-    log_sub "9/9 Updating state file..."
+    # === Step 9: Security scanner ===
+    log_sub "9/12 Updating security scanner..."
+    if [[ -x /usr/local/bin/azwp-security-scan ]]; then
+        sed -i "s|${old_domain}|${new_domain}|g" /usr/local/bin/azwp-security-scan 2>/dev/null || true
+        if [[ "$old_web_root" != "$new_web_root" ]]; then
+            sed -i "s|${old_web_root}|${new_web_root}|g" /usr/local/bin/azwp-security-scan 2>/dev/null || true
+        fi
+    fi
+
+    # === Step 10: Cloudflare cache rule ===
+    log_sub "10/12 Updating Cloudflare cache rule..."
+    local cf_zone cf_email cf_key
+    cf_email="$(config_get CF_EMAIL 2>/dev/null)" || cf_email=""
+    cf_key="$(config_get CF_API_KEY 2>/dev/null)" || cf_key=""
+    cf_zone="$(config_get CF_ZONE_ID 2>/dev/null)" || cf_zone=""
+    if [[ -n "$cf_zone" && -n "$cf_email" && -n "$cf_key" ]]; then
+        local cf_expr="(http.host eq \\\"${new_domain}\\\" and not starts_with(http.request.uri.path, \\\"/wp-admin\\\") and not starts_with(http.request.uri.path, \\\"/wp-login\\\") and not starts_with(http.request.uri.path, \\\"/wp-json\\\") and http.request.method eq \\\"GET\\\" and not http.cookie contains \\\"wordpress_logged_in\\\")"
+        local rule_response
+        rule_response="$(curl -sf -X PUT \
+            "https://api.cloudflare.com/client/v4/zones/${cf_zone}/rulesets/phases/http_request_cache_settings/entrypoint" \
+            -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
+            -H "Content-Type: application/json" \
+            -d "{\"rules\":[{\"expression\":\"${cf_expr}\",\"description\":\"azwp-cache: Public pages for ${new_domain}\",\"action\":\"set_cache_settings\",\"action_parameters\":{\"cache\":true,\"edge_ttl\":{\"mode\":\"override_origin\",\"default\":86400},\"browser_ttl\":{\"mode\":\"override_origin\",\"default\":600}}}]}" 2>/dev/null)" || true
+        if echo "$rule_response" | grep -q '"success":true\|"success": true'; then
+            log_success "Cloudflare cache rule updated for $new_domain"
+            # Purge old domain cache
+            curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/${cf_zone}/purge_cache" \
+                -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
+                -H "Content-Type: application/json" \
+                -d '{"purge_everything":true}' > /dev/null 2>&1 || true
+        else
+            log_warn "Cloudflare update failed. Run 'azwp advanced cloudflare' to reconfigure."
+        fi
+    else
+        printf "    ${DIM}No Cloudflare credentials saved — skipped${NC}\n"
+    fi
+
+    # === Step 11: Cleanup ===
+    log_sub "11/12 Cleaning up old files..."
+    # Remove old nginx error log (new one auto-created by nginx)
+    rm -f "/var/log/nginx/${old_domain}-error.log" 2>/dev/null || true
+
+    # === Step 12: State file ===
+    log_sub "12/12 Updating state file..."
     state_set "DOMAIN" "$new_domain"
     state_set "WEB_ROOT" "$new_web_root"
     DOMAIN="$new_domain"
@@ -1354,6 +1432,44 @@ menu_domain() {
     local redis_salt
     redis_salt="$(wp_run config get WP_CACHE_KEY_SALT 2>/dev/null | tr -d '[:space:]')" || redis_salt="?"
     printf "  ${GREEN}OK${NC}  Redis salt:  %s\n" "$redis_salt"
+
+    # Security scanner
+    if [[ -x /usr/local/bin/azwp-security-scan ]]; then
+        if grep -q "$new_domain" /usr/local/bin/azwp-security-scan 2>/dev/null; then
+            printf "  ${GREEN}OK${NC}  Scanner:     domain updated\n"
+        else
+            printf "  ${RED}!!${NC}  Scanner:     still references old domain\n"
+        fi
+    else
+        printf "  ${DIM}--${NC}  Scanner:     not installed\n"
+    fi
+
+    # Cloudflare
+    local v_cf_zone
+    v_cf_zone="$(config_get CF_ZONE_ID 2>/dev/null)" || v_cf_zone=""
+    if [[ -n "$v_cf_zone" ]]; then
+        local v_cf_email v_cf_key
+        v_cf_email="$(config_get CF_EMAIL 2>/dev/null)" || v_cf_email=""
+        v_cf_key="$(config_get CF_API_KEY 2>/dev/null)" || v_cf_key=""
+        local v_rules
+        v_rules="$(curl -sf -X GET "https://api.cloudflare.com/client/v4/zones/${v_cf_zone}/rulesets/phases/http_request_cache_settings/entrypoint" \
+            -H "X-Auth-Email: ${v_cf_email}" -H "X-Auth-Key: ${v_cf_key}" 2>/dev/null)" || v_rules=""
+        if echo "$v_rules" | grep -q "$new_domain"; then
+            printf "  ${GREEN}OK${NC}  Cloudflare:  cache rule for %s\n" "$new_domain"
+        else
+            printf "  ${RED}!!${NC}  Cloudflare:  cache rule NOT updated\n"
+        fi
+    else
+        printf "  ${DIM}--${NC}  Cloudflare:  not configured\n"
+    fi
+
+    # Preload queue
+    local v_preload="${new_web_root}/wp-content/uploads/acms-preload-queue.txt"
+    if [[ -f "$v_preload" ]]; then
+        printf "  ${YELLOW}--${NC}  Preload:     queue file exists (may have old URLs)\n"
+    else
+        printf "  ${GREEN}OK${NC}  Preload:     queue cleared\n"
+    fi
 
     printf "  ──────────────────────────────────────\n\n"
 }
