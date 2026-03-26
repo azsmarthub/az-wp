@@ -51,7 +51,7 @@ configure_php_ini() {
 
     render_template \
         "${AZ_DIR}/templates/php/php.ini.tpl" \
-        "/etc/php/${PHP_VERSION}/fpm/conf.d/99-az-wp.ini" \
+        "/etc/php/${PHP_VERSION}/fpm/conf.d/99-azwp.ini" \
         "TUNE_PHP_MEMORY_LIMIT SITE_HOME"
 
     log_sub "PHP ini configured (memory_limit=${TUNE_PHP_MEMORY_LIMIT})"
@@ -113,7 +113,7 @@ configure_fpm_pools() {
 
     # CLI config: no restrictions
     echo -e "[PHP]\ndisable_functions =\nopen_basedir =" \
-        > "/etc/php/${PHP_VERSION}/cli/conf.d/99-az-wp-cli.ini"
+        > "/etc/php/${PHP_VERSION}/cli/conf.d/99-azwp-cli.ini"
 
     log_info "CLI config: no disable_functions, no open_basedir"
 }

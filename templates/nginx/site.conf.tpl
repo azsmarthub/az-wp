@@ -54,7 +54,7 @@ server {
     }
 
     # Optional: header-based cache bypass for programmatic purge
-    if ($http_x_purge_cache = "az-wp-purge-key") {
+    if ($http_x_purge_cache = "azwp-purge-key") {
         set $skip_cache 1;
     }
 

@@ -1,4 +1,4 @@
-# az-wp Redis configuration
+# azwp Redis configuration
 # Pure cache mode — no persistence
 
 # Network

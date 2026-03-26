@@ -1,4 +1,4 @@
-; az-wp OPcache configuration
+; azwp OPcache configuration
 
 [opcache]
 opcache.enable = 1

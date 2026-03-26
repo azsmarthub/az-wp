@@ -1,4 +1,4 @@
-# az-wp
+# azwp
 
 WordPress deployment script for Ubuntu VPS. One VPS = One Site.
 
@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/azsmarthub/az-wp/main/setup.sh | ba
 - FastCGI full-page cache with smart bypass rules
 - SSL via Let's Encrypt (auto-renew)
 - Security hardening (UFW, Fail2Ban, SSH)
-- CLI management tool: `az-wp`
+- CLI management tool: `azwp`
 
 ## Requirements
 
@@ -27,12 +27,12 @@ curl -fsSL https://raw.githubusercontent.com/azsmarthub/az-wp/main/setup.sh | ba
 ## Post-install management
 
 ```bash
-az-wp              # Interactive menu
-az-wp status       # System dashboard
-az-wp cache purge  # Purge all caches
-az-wp backup full  # Full backup
-az-wp wp update    # Update WordPress
-az-wp retune       # Re-tune after VPS resize
+azwp              # Interactive menu
+azwp status       # System dashboard
+azwp cache purge  # Purge all caches
+azwp backup full  # Full backup
+azwp wp update    # Update WordPress
+azwp retune       # Re-tune after VPS resize
 ```
 
 ## Stack

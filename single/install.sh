@@ -77,7 +77,7 @@ print_banner() {
     [[ -d "$AZ_DIR/clone" && -f "$AZ_DIR/clone/database.sql.gz" ]] && mode="Clone Mode"
     printf "\n"
     printf "===================================================\n"
-    printf "       az-wp-single Installer v%s\n" "$ver"
+    printf "       azwp Installer v%s\n" "$ver"
     printf "       Mode: %s\n" "$mode"
     printf "===================================================\n"
     printf "\n"
@@ -381,9 +381,9 @@ step_wordpress() {
     # Auto backup: every 2 days at 3:00 AM
     log_sub "Setting up auto backup (every 2 days)..."
     mkdir -p "/home/${SITE_USER}/backups"
-    printf '# az-wp: backup every 2 days at 3:00 AM\n0 3 */2 * * root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1\n' \
-        > /etc/cron.d/az-wp-backup
-    chmod 644 /etc/cron.d/az-wp-backup
+    printf '# azwp: backup every 2 days at 3:00 AM\n0 3 */2 * * root /usr/local/bin/azwp backup full >> /var/log/azwp/backup.log 2>&1\n' \
+        > /etc/cron.d/azwp-backup
+    chmod 644 /etc/cron.d/azwp-backup
 
     # Cache helpers
     log_sub "Setting up cache helpers..."
@@ -406,11 +406,11 @@ NSCRIPT
     chmod 440 /etc/sudoers.d/nginx-cache-purge
 
     # Cache stats cron + initial generation
-    cat > /etc/cron.d/az-wp-cache-stats <<CSCRON
-# az-wp: update cache stats every 5 minutes
+    cat > /etc/cron.d/azwp-cache-stats <<CSCRON
+# azwp: update cache stats every 5 minutes
 */5 * * * * root /usr/local/bin/nginx-cache-purge ${CACHE_PATH} count > /tmp/az-cache-count && /usr/local/bin/nginx-cache-purge ${CACHE_PATH} size > /tmp/az-cache-size && printf '{"files":%s,"size":%s,"updated":"%s"}' "\$(cat /tmp/az-cache-count)" "\$(cat /tmp/az-cache-size)" "\$(date '+%Y-%m-%d %H:%M:%S')" > /home/${SITE_USER}/cache/cache-stats.json 2>/dev/null
 CSCRON
-    chmod 644 /etc/cron.d/az-wp-cache-stats
+    chmod 644 /etc/cron.d/azwp-cache-stats
 
     # Initial cache stats
     local _stats_dir="/home/${SITE_USER}/cache"
@@ -455,14 +455,14 @@ CSCRON
                 IFS='|' read -r name sched sleep_prefix endpoint max_time method desc <<< "$p"
                 local curl_cmd="${base} --max-time ${max_time}"
                 [[ "$method" == "POST" ]] && curl_cmd="${curl_cmd} -X POST"
-                printf '# az-wp cron: %s\n%s root %s%s "%s%s?token=%s" > /dev/null 2>&1\n' \
+                printf '# azwp cron: %s\n%s root %s%s "%s%s?token=%s" > /dev/null 2>&1\n' \
                     "$desc" "$sched" "$sleep_prefix" "$curl_cmd" "$url" "$endpoint" "$api_token" \
-                    > "/etc/cron.d/az-wp-${name}"
-                chmod 644 "/etc/cron.d/az-wp-${name}"
+                    > "/etc/cron.d/azwp-${name}"
+                chmod 644 "/etc/cron.d/azwp-${name}"
             done
             log_sub "Installed 17 AffiliateCMS cron jobs."
         else
-            log_warn "API token not found — run 'az-wp cron preset' later."
+            log_warn "API token not found — run 'azwp cron preset' later."
         fi
     fi
 }
@@ -500,9 +500,9 @@ step_security() {
 # ---------------------------------------------------------------------------
 install_cli_menu() {
     if [[ -f "$SCRIPT_DIR/menu.sh" ]]; then
-        ln -sf "$SCRIPT_DIR/menu.sh" /usr/local/bin/az-wp
+        ln -sf "$SCRIPT_DIR/menu.sh" /usr/local/bin/azwp
         chmod +x "$SCRIPT_DIR/menu.sh"
-        log_info "CLI menu installed: az-wp"
+        log_info "CLI menu installed: azwp"
     else
         log_warn "menu.sh not found — CLI menu not installed."
     fi
@@ -560,7 +560,7 @@ print_summary() {
     if [[ -n "$ssl_info" ]]; then
         printf "  ${GREEN}OK${NC}  SSL           Let's Encrypt (expires: %s)\n" "$ssl_info"
     else
-        printf "  ${YELLOW}--${NC}  SSL           Not issued (run: az-wp advanced ssl issue)\n"
+        printf "  ${YELLOW}--${NC}  SSL           Not issued (run: azwp advanced ssl issue)\n"
     fi
 
     # Redis
@@ -577,7 +577,7 @@ print_summary() {
 
     # Crons
     local cron_count
-    cron_count="$(ls /etc/cron.d/az-wp-* 2>/dev/null | wc -l || echo 0)"
+    cron_count="$(ls /etc/cron.d/azwp-* 2>/dev/null | wc -l || echo 0)"
     printf "  ${GREEN}OK${NC}  Cron jobs     %s configured\n" "$cron_count"
 
     # Backup
@@ -605,8 +605,8 @@ print_summary() {
     printf "  Redis:      %s (Unix socket)\n" "${TUNE_REDIS_MAXMEM:-?}"
     printf "  OPcache:    %sMB + JIT %s\n" "${TUNE_OPCACHE_MEMORY:-?}" "${TUNE_JIT_BUFFER:-0}"
     printf "  ──────────────────────────────────────\n"
-    printf "\n  ${BOLD}Manage:${NC} az-wp\n"
-    printf "  ${BOLD}Help:${NC}   az-wp help\n\n"
+    printf "\n  ${BOLD}Manage:${NC} azwp\n"
+    printf "  ${BOLD}Help:${NC}   azwp help\n\n"
 }
 
 # ---------------------------------------------------------------------------

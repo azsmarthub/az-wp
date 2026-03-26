@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# az-wp-single — One-line bootstrap installer
+# azwp-single — One-line bootstrap installer
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/azsmarthub/az-wp/main/setup.sh | bash
@@ -8,7 +8,7 @@
 # What this does:
 #   1. Checks root + Ubuntu 22.04/24.04
 #   2. Installs git if missing
-#   3. Clones az-wp repo to /opt/az-wp
+#   3. Clones az-wp repo to /opt/azwp
 #   4. Runs the installer
 # ============================================================================
 
@@ -19,7 +19,7 @@ GREEN='\033[0;32m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-AZ_INSTALL_DIR="/opt/az-wp"
+AZ_INSTALL_DIR="/opt/azwp"
 AZ_REPO="https://github.com/azsmarthub/az-wp.git"
 AZ_BRANCH="main"
 
@@ -38,7 +38,7 @@ ok() {
 
 printf "\n"
 printf "${BOLD}===================================================\n"
-printf "  az-wp-single — Bootstrap Installer\n"
+printf "  azwp — Bootstrap Installer\n"
 printf "===================================================${NC}\n"
 printf "\n"
 
@@ -92,7 +92,7 @@ else
     # Remove leftover if exists but not a git repo
     [[ -d "$AZ_INSTALL_DIR" ]] && rm -rf "$AZ_INSTALL_DIR"
 
-    printf "  ..  Downloading az-wp...\n"
+    printf "  ..  Downloading azwp...\n"
     git clone --depth 1 --branch "$AZ_BRANCH" "$AZ_REPO" "$AZ_INSTALL_DIR" --quiet
     ok "Downloaded to $AZ_INSTALL_DIR"
 fi

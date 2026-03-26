@@ -82,7 +82,7 @@ issue_certificate() {
 
     if ! check_dns; then
         log_warn "Domain does not resolve. SSL skipped."
-        log_info "Point your DNS to this VPS, then run: az-wp ssl issue"
+        log_info "Point your DNS to this VPS, then run: azwp ssl issue"
         state_set "SSL_ISSUED" "false"
         return 0
     fi
@@ -118,7 +118,7 @@ issue_certificate() {
         log_sub "Auto-renew enabled. Compatible with Cloudflare Full (Strict)."
     else
         state_set "SSL_ISSUED" "false"
-        log_warn "SSL certificate failed. You can retry: az-wp ssl issue"
+        log_warn "SSL certificate failed. You can retry: azwp ssl issue"
         return 0
     fi
 }

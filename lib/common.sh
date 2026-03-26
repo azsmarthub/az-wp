@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# common.sh — Shared library for az-wp-single
+# common.sh — Shared library for azwp
 # Colors, logging, state management, template rendering, helpers
 
 # Prevent double-source
@@ -20,10 +20,10 @@ NC='\033[0m'
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-AZ_STATE_DIR="/etc/az-wp"
+AZ_STATE_DIR="/etc/azwp"
 AZ_STATE_FILE="$AZ_STATE_DIR/install.state"
 AZ_CONFIG_FILE="$AZ_STATE_DIR/config"
-AZ_LOG_DIR="/var/log/az-wp"
+AZ_LOG_DIR="/var/log/azwp"
 AZ_LOG_FILE="$AZ_LOG_DIR/install.log"
 
 # AZ_DIR and AZ_VERSION are set by the caller before sourcing.

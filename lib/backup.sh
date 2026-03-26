@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backup.sh — Backup and restore for az-wp single site
+# backup.sh — Backup and restore for azwp single site
 # Adapted from proven vps-backup.sh patterns
 [[ -n "${_AZ_BACKUP_LOADED:-}" ]] && return 0
 _AZ_BACKUP_LOADED=1
@@ -227,7 +227,7 @@ restore_full() {
     chown -R "${site_user}:${site_user}" "$web_root"
 
     log_success "Files restored successfully from: $(basename "$file")"
-    log_info "Note: DB must be restored separately with 'az-wp db restore'"
+    log_info "Note: DB must be restored separately with 'azwp db restore'"
 }
 
 # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ cleanup_old_backups() {
 # ---------------------------------------------------------------------------
 schedule_backup() {
     local frequency="${1:-daily}"
-    local cron_file="/etc/cron.d/az-wp-backup"
+    local cron_file="/etc/cron.d/azwp-backup"
     local cron_schedule
 
     case "$frequency" in
@@ -307,17 +307,17 @@ schedule_backup() {
             ;;
     esac
 
-    mkdir -p /var/log/az-wp
+    mkdir -p /var/log/azwp
 
     cat > "$cron_file" <<EOF
-# az-wp automated backup — ${frequency} at 3:00 AM
+# azwp automated backup — ${frequency} at 3:00 AM
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-${cron_schedule} root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1
+${cron_schedule} root /usr/local/bin/azwp backup full >> /var/log/azwp/backup.log 2>&1
 EOF
 
     chmod 644 "$cron_file"
     log_success "Backup scheduled: ${frequency} at 3:00 AM"
     log_info "Cron file: ${cron_file}"
-    log_info "Log file: /var/log/az-wp/backup.log"
+    log_info "Log file: /var/log/azwp/backup.log"
 }

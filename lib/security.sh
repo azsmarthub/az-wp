@@ -17,7 +17,7 @@ harden_ssh() {
     # Do NOT disable root login automatically — the site user has no
     # sudo access and no SSH password. Disabling root would lock out
     # the only way to manage the server. Users can disable root login
-    # manually via 'az-wp security' after setting up SSH keys.
+    # manually via 'azwp security' after setting up SSH keys.
     # sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$sshd_config"
     log_sub "PermitRootLogin: kept as-is (disable manually after setting up SSH keys)"
 

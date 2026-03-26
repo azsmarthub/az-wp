@@ -6,8 +6,8 @@ _AZ_WP_SECURITY_LOADED=1
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-AZ_SECURITY_LOG_DIR="/var/log/az-wp/security"
-AZ_SECURITY_SCRIPT="/usr/local/bin/az-wp-security-scan"
+AZ_SECURITY_LOG_DIR="/var/log/azwp/security"
+AZ_SECURITY_SCRIPT="/usr/local/bin/azwp-security-scan"
 
 # ---------------------------------------------------------------------------
 # Install security tools
@@ -41,7 +41,7 @@ create_scan_script() {
 
     cat > "$AZ_SECURITY_SCRIPT" <<'SCANEOF'
 #!/usr/bin/env bash
-# az-wp Security Scanner — runs via cron
+# azwp Security Scanner — runs via cron
 # Tier 1: WP core + plugin checksum (daily, <5s)
 # Tier 2: WP doctor health check (weekly, <10s)
 # Tier 3: PHP malware pattern scan (weekly, <5s)
@@ -74,9 +74,9 @@ mkdir -p "$LOG_DIR"
 # Telegram alert config
 TG_BOT_TOKEN=""
 TG_CHAT_ID=""
-if [[ -f /etc/az-wp/config ]]; then
-    TG_BOT_TOKEN=$(grep "^TG_BOT_TOKEN=" /etc/az-wp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
-    TG_CHAT_ID=$(grep "^TG_CHAT_ID=" /etc/az-wp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
+if [[ -f /etc/azwp/config ]]; then
+    TG_BOT_TOKEN=$(grep "^TG_BOT_TOKEN=" /etc/azwp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
+    TG_CHAT_ID=$(grep "^TG_CHAT_ID=" /etc/azwp/config 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || true
 fi
 
 log "=== Security Scan Started ==="
@@ -189,7 +189,7 @@ if [[ "$ISSUES_FOUND" -gt 0 && -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]]; then
         fi
     fi
 
-    TG_MSG="🔒 *az-wp Security Alert*
+    TG_MSG="🔒 *azwp Security Alert*
 🌐 \`${DOMAIN}\`
 ⏰ ${TIMESTAMP}
 ⚠️ ${ISSUES_FOUND} issue(s) found
@@ -205,7 +205,7 @@ $(printf "$REPORT")
 
     date +%s > "$ALERT_FILE"
 elif [[ "$ISSUES_FOUND" -gt 0 ]]; then
-    log "No Telegram configured — alert logged only. Setup: az-wp advanced security alert-telegram"
+    log "No Telegram configured — alert logged only. Setup: azwp advanced security alert-telegram"
 fi
 
 # Cleanup old logs (keep 30 days)
@@ -223,18 +223,18 @@ SCANEOF2
 # ---------------------------------------------------------------------------
 setup_security_crons() {
     # Daily scan: core + plugin checksums + suspicious files (2:30 AM)
-    cat > /etc/cron.d/az-wp-security-daily <<EOF
-# az-wp: daily security scan (core + plugin checksums)
+    cat > /etc/cron.d/azwp-security-daily <<EOF
+# azwp: daily security scan (core + plugin checksums)
 30 2 * * * root $AZ_SECURITY_SCRIPT daily > /dev/null 2>&1
 EOF
-    chmod 644 /etc/cron.d/az-wp-security-daily
+    chmod 644 /etc/cron.d/azwp-security-daily
 
     # Weekly scan: full scan + wordfence malware (Sunday 4:00 AM)
-    cat > /etc/cron.d/az-wp-security-weekly <<EOF
-# az-wp: weekly security scan (checksums + doctor + malware patterns)
+    cat > /etc/cron.d/azwp-security-weekly <<EOF
+# azwp: weekly security scan (checksums + doctor + malware patterns)
 0 4 * * 0 root $AZ_SECURITY_SCRIPT weekly > /dev/null 2>&1
 EOF
-    chmod 644 /etc/cron.d/az-wp-security-weekly
+    chmod 644 /etc/cron.d/azwp-security-weekly
 
     log_sub "Security crons configured (daily 2:30am, weekly Sunday 4am)."
 }
