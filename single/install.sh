@@ -426,6 +426,15 @@ SCRIPT
 CRON
     chmod 644 /etc/cron.d/az-wp-cache-stats
 
+    # Generate initial cache-stats.json
+    log_sub "Generating initial cache stats..."
+    local _count _size _stats_dir="/home/${SITE_USER}/cache"
+    mkdir -p "$_stats_dir"
+    _count="$(find "$CACHE_PATH" -type f 2>/dev/null | wc -l || echo 0)"
+    _size="$(du -sb "$CACHE_PATH" 2>/dev/null | awk '{print $1}' || echo 0)"
+    printf '{"files":%s,"size":%s,"updated":"%s"}' "$_count" "$_size" "$(date '+%Y-%m-%d %H:%M:%S')" > "$_stats_dir/cache-stats.json"
+    chown "$SITE_USER:$SITE_USER" "$_stats_dir/cache-stats.json"
+
     # Install AffiliateCMS crons if clone mode (site has the plugins)
     if [[ -f "$clone_dir/database.sql.gz" ]]; then
         log_sub "Installing AffiliateCMS cron jobs..."

@@ -54,6 +54,19 @@ wp_run() {
 # ---------------------------------------------------------------------------
 _header() { printf "\n${BOLD}  %s${NC}\n  ──────────────────────────────────────\n" "$1"; }
 
+# Generate/refresh cache-stats.json with real file count and size
+_refresh_cache_stats() {
+    local stats_dir="/home/${SITE_USER}/cache"
+    local stats_file="${stats_dir}/cache-stats.json"
+    local cache_dir="${CACHE_PATH:-${stats_dir}/fastcgi}"
+    mkdir -p "$stats_dir"
+    local count size
+    count="$(find "$cache_dir" -type f 2>/dev/null | wc -l || echo 0)"
+    size="$(du -sb "$cache_dir" 2>/dev/null | awk '{print $1}' || echo 0)"
+    printf '{"files":%s,"size":%s,"updated":"%s"}' "$count" "$size" "$(date '+%Y-%m-%d %H:%M:%S')" > "$stats_file"
+    chown "${SITE_USER}:${SITE_USER}" "$stats_file" 2>/dev/null || true
+}
+
 
 # ===========================================================================
 # MAIN MENU
@@ -350,10 +363,12 @@ menu_cache() {
             rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
             redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
             systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
+            _refresh_cache_stats
             log_success "FastCGI + Redis + OPcache purged."
             ;;
         purge-fcgi)
             rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
+            _refresh_cache_stats
             log_success "FastCGI cache purged."
             ;;
         purge-redis)
@@ -1128,9 +1143,8 @@ menu_domain() {
     redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
     wp_run config set WP_CACHE_KEY_SALT "${new_domain}_" > /dev/null
 
-    # Update cache-stats.json path reference
-    local stats_file="/home/${SITE_USER}/cache/cache-stats.json"
-    [[ -f "$stats_file" ]] && printf '{"files":0,"size":0,"updated":"%s"}' "$(date '+%Y-%m-%d %H:%M:%S')" > "$stats_file"
+    # Regenerate cache-stats.json with real data
+    _refresh_cache_stats
 
     # Update cache-stats cron if exists
     if [[ -f /etc/cron.d/az-wp-cache-stats ]]; then
