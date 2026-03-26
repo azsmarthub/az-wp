@@ -1833,14 +1833,15 @@ This is a test message from azwp security scanner."
             fi
             log_success "Zone ID: $cf_zone"
 
-            # Create Cache Rule
-            log_sub "Creating cache rule for $DOMAIN..."
+            # Create Cache Rule — excludes wp-admin, wp-login, wp-json, logged-in users
+            log_sub "Creating cache rule for $DOMAIN (public pages only)..."
+            local cf_expr="(http.host eq \\\"${DOMAIN}\\\" and not starts_with(http.request.uri.path, \\\"/wp-admin\\\") and not starts_with(http.request.uri.path, \\\"/wp-login\\\") and not starts_with(http.request.uri.path, \\\"/wp-json\\\") and http.request.method eq \\\"GET\\\" and not http.cookie contains \\\"wordpress_logged_in\\\")"
             local rule_response
             rule_response="$(curl -sf -X PUT \
                 "https://api.cloudflare.com/client/v4/zones/${cf_zone}/rulesets/phases/http_request_cache_settings/entrypoint" \
                 -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
                 -H "Content-Type: application/json" \
-                -d "{\"rules\":[{\"expression\":\"(http.host eq \\\"${DOMAIN}\\\")\",\"description\":\"azwp-cache: Cache all for ${DOMAIN}\",\"action\":\"set_cache_settings\",\"action_parameters\":{\"cache\":true,\"edge_ttl\":{\"mode\":\"override_origin\",\"default\":86400},\"browser_ttl\":{\"mode\":\"override_origin\",\"default\":600}}}]}" 2>/dev/null)" || true
+                -d "{\"rules\":[{\"expression\":\"${cf_expr}\",\"description\":\"azwp-cache: Public pages for ${DOMAIN}\",\"action\":\"set_cache_settings\",\"action_parameters\":{\"cache\":true,\"edge_ttl\":{\"mode\":\"override_origin\",\"default\":86400},\"browser_ttl\":{\"mode\":\"override_origin\",\"default\":600}}}]}" 2>/dev/null)" || true
 
             if echo "$rule_response" | grep -q '"success":true\|"success": true'; then
                 config_set "CF_EMAIL" "$cf_email"
