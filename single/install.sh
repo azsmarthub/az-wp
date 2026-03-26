@@ -329,7 +329,11 @@ step_wordpress() {
         tar xzf "$clone_dir/wp-content.tar.gz" -C "$WEB_ROOT" 2>/dev/null
 
         log_sub "Search & replace domain..."
+        # Replace original production domain
         sudo -u "$SITE_USER" wp search-replace 'productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
+        # Replace any previous clone domain (if re-cloning)
+        sudo -u "$SITE_USER" wp search-replace 'azwp.azsmarthub.com' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
+        # Force set correct URLs
         sudo -u "$SITE_USER" wp option update siteurl "https://$DOMAIN" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
         sudo -u "$SITE_USER" wp option update home "https://$DOMAIN" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
@@ -345,6 +349,12 @@ step_wordpress() {
         sudo -u "$SITE_USER" wp config set WP_CACHE_KEY_SALT "${DOMAIN}_" --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
 
         log_sub "Enabling Redis Object Cache..."
+        # Ensure redis-cache plugin is installed (clone may have it but drop-in missing)
+        if [[ ! -d "$WEB_ROOT/wp-content/plugins/redis-cache" ]]; then
+            sudo -u "$SITE_USER" wp plugin install redis-cache --activate --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        else
+            sudo -u "$SITE_USER" wp plugin activate redis-cache --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        fi
         sudo -u "$SITE_USER" wp redis enable --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
         log_sub "Configuring cache path..."

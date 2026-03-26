@@ -15,21 +15,23 @@ AZ_SECURITY_SCRIPT="/usr/local/bin/az-wp-security-scan"
 install_security_tools() {
     log_sub "Installing security scan tools..."
 
-    # Ensure pip3
-    if ! command -v pip3 >/dev/null 2>&1; then
-        NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip > /dev/null 2>&1
+    # Install pip3 + Wordfence CLI (all optional — won't crash if fail)
+    log_sub "Installing Wordfence CLI (optional)..."
+    NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python3-venv > /dev/null 2>&1 || true
+    if command -v pip3 >/dev/null 2>&1; then
+        pip3 install --break-system-packages wordfence > /dev/null 2>&1 || \
+            pip3 install wordfence > /dev/null 2>&1 || \
+            log_warn "Wordfence CLI install failed (optional — scan will use checksums only)"
+    else
+        log_warn "pip3 not available — Wordfence CLI skipped"
     fi
 
-    # Install Wordfence CLI (free)
-    log_sub "Installing Wordfence CLI..."
-    pip3 install wordfence > /dev/null 2>&1 || log_warn "Wordfence CLI install failed (optional)"
-
-    # Install wp-cli doctor command
+    # Install wp-cli doctor command (optional)
     log_sub "Installing WP-CLI doctor..."
-    sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --allow-root --path="$WEB_ROOT" > /dev/null 2>&1 || true
+    sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --path="$WEB_ROOT" > /dev/null 2>&1 || true
 
-    # Install msmtp for email alerts
-    log_sub "Installing msmtp (email alerts)..."
+    # Install mail utilities (optional)
+    log_sub "Installing mail tools (email alerts)..."
     NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y msmtp msmtp-mta mailutils > /dev/null 2>&1 || true
 
     # Create log directory
