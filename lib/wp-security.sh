@@ -19,17 +19,9 @@ install_security_tools() {
     log_sub "Installing WP-CLI doctor..."
     sudo -u "$SITE_USER" wp package install wp-cli/doctor-command --path="$WEB_ROOT" > /dev/null 2>&1 || true
 
-    # Wordfence CLI — install in background (won't block install)
-    apt_install python3-pip python3-venv || true
-    if command -v pip3 >/dev/null 2>&1; then
-        log_sub "Installing Wordfence CLI (background — continues while install proceeds)..."
-        (
-            pip3 install --break-system-packages --no-cache-dir wordfence > /dev/null 2>&1 || \
-                pip3 install --no-cache-dir wordfence > /dev/null 2>&1 || exit 1
-            wordfence configure --default --accept-terms > /dev/null 2>&1 || true
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Wordfence CLI installed + configured" >> "${AZ_SECURITY_LOG_DIR}/install.log"
-        ) &
-    fi
+    # Note: Wordfence CLI v5.x incompatible with Python 3.12 (Ubuntu 24.04)
+    # PcrePattern import error — bug in their code, no workaround
+    # Tier 1+2 (checksums + doctor + file checks) provide sufficient coverage
 
     # Telegram alerts — no extra packages needed (uses curl)
 
@@ -170,27 +162,17 @@ case "${1:-daily}" in
             log "$plugin_updates plugin updates available"
         fi
 
-        # --- Tier 3: Wordfence malware scan ---
-        log "--- Tier 3: Wordfence Malware Scan ---"
-        if command -v wordfence >/dev/null 2>&1; then
-            # Check if Wordfence is configured (requires license acceptance)
-            # Ensure configured, then scan
-            wordfence configure --default --accept-terms >/dev/null 2>&1 || true
-            if wordfence malware-scan "$WEB_ROOT" \
-                    --output-path "$LOG_DIR/wordfence-${DATE}.txt" \
-                    --accept-terms 2>> "$LOG_FILE"; then
-                malware_count="$(wc -l < "$LOG_DIR/wordfence-${DATE}.txt" 2>/dev/null | tr -d '[:space:]')"
-                malware_count="${malware_count:-0}"
-                if [[ "$malware_count" -gt 0 ]]; then
-                    alert "Wordfence found $malware_count potential threats! See: $LOG_DIR/wordfence-${DATE}.txt"
-                else
-                    log "Wordfence: no malware found"
-                fi
-            else
-                log "Wordfence scan failed or not configured (run: wordfence configure)"
-            fi
+        # --- Tier 3: PHP malware pattern scan (no external dependency) ---
+        log "--- Tier 3: Malware Pattern Scan ---"
+        suspicious_files=$(grep -rlE \
+            'eval\s*\(\s*(base64_decode|gzinflate|str_rot13|gzuncompress)|preg_replace\s*\(.*/e|assert\s*\(\s*\$_|system\s*\(\s*\$_|passthru\s*\(\s*\$_|shell_exec\s*\(\s*\$_|\$_GET\s*\[\s*['\''"]cmd|c99shell|r57shell|webshell|FilesMan|WSO\s' \
+            "$WEB_ROOT/wp-content/" 2>/dev/null | grep -v '/cache/' | head -20) || true
+        if [[ -n "$suspicious_files" ]]; then
+            echo "$suspicious_files" > "$LOG_DIR/malware-${DATE}.txt"
+            sus_count=$(echo "$suspicious_files" | wc -l | tr -d '[:space:]')
+            alert "Found $sus_count suspicious PHP files! See: $LOG_DIR/malware-${DATE}.txt"
         else
-            log "Wordfence CLI not installed (skipped)"
+            log "Malware pattern scan: clean (no suspicious patterns found)"
         fi
         ;;
 esac
