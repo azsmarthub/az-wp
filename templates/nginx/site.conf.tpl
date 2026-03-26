@@ -161,10 +161,12 @@ server {
         fastcgi_cache_lock_timeout 5s;
         add_header X-FastCGI-Cache $upstream_cache_status always;
 
-        # Browser caching for HTML pages (cache 10min, revalidate after)
-        add_header Cache-Control "public, max-age=600, stale-while-revalidate=86400" always;
+        # Browser + CDN caching for HTML pages
+        # s-maxage=86400: Cloudflare edge caches 24h
+        # max-age=600: browser caches 10min then revalidates
+        add_header Cache-Control "public, s-maxage=86400, max-age=600" always;
         add_header X-Cache-Enabled "true" always;
-        add_header Vary "Accept-Encoding, Cookie" always;
+        add_header Vary "Accept-Encoding" always;
         etag on;
     }
 

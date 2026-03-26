@@ -332,6 +332,8 @@ step_wordpress() {
         log_sub "Search & replace domain..."
         # Replace original production domain
         sudo -u "$SITE_USER" wp search-replace 'productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
+        # Replace CDN domain
+        sudo -u "$SITE_USER" wp search-replace 'cdn.productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
         # Replace any previous clone domain (if re-cloning)
         sudo -u "$SITE_USER" wp search-replace 'azwp.azsmarthub.com' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
         # Force set correct URLs
