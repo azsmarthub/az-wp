@@ -597,18 +597,21 @@ menu_cron() {
             for f in /etc/cron.d/az-wp-*; do
                 [[ ! -f "$f" ]] && continue
                 local bn; bn="$(basename "$f")"
-                [[ "$bn" == "az-wp-cron" ]] && continue  # keep wp-cron
+                # Keep system crons
+                [[ "$bn" == "az-wp-cron" || "$bn" == "az-wp-backup" || "$bn" == "az-wp-pma-expire" ]] && continue
                 count=$((count + 1))
             done
-            printf "  Will remove %d cron jobs (keeping WP cron).\n" "$count"
+            printf "  Will remove %d plugin cron jobs.\n" "$count"
+            printf "  ${DIM}Keeping: az-wp-cron, az-wp-backup, az-wp-pma-expire${NC}\n"
             printf "  Then reinstall AffiliateCMS preset.\n\n"
             confirm "Proceed?" || return 0
             for f in /etc/cron.d/az-wp-*; do
                 [[ ! -f "$f" ]] && continue
-                [[ "$(basename "$f")" == "az-wp-cron" ]] && continue
+                local bn; bn="$(basename "$f")"
+                [[ "$bn" == "az-wp-cron" || "$bn" == "az-wp-backup" || "$bn" == "az-wp-pma-expire" ]] && continue
                 rm -f "$f"
             done
-            log_success "Removed $count cron jobs."
+            log_success "Removed $count plugin cron jobs."
             _cron_install_preset
             ;;
 
@@ -664,26 +667,34 @@ menu_cron() {
                 log_warn "Not found: $target"
                 return 0
             fi
-            # Extract command (skip schedule + user)
+            # Extract command (skip schedule fields + "root")
+            local raw_line
+            raw_line="$(grep -v '^#' "$target" | grep -v '^$' | head -1 || true)"
+            # Fields: 1-5=schedule, 6=user, 7+=command
             local cmd
-            cmd="$(grep -v '^#' "$target" | grep -v '^$' | head -1 | awk '{for(i=7;i<=NF;i++) printf "%s ", $i}' || true)"
-            # Remove > /dev/null redirect to see output
-            cmd="$(printf '%s' "$cmd" | sed 's|> */dev/null.*||')"
-            printf "  Running: %s\n\n" "$cmd"
-            eval "$cmd" 2>&1 | head -20
-            printf "\n"
+            cmd="$(printf '%s' "$raw_line" | awk '{for(i=7;i<=NF;i++) printf "%s ", $i}')"
+            # Strip ALL redirects so we see output
+            cmd="$(printf '%s' "$cmd" | sed 's|>>* *[^ ]*||g; s|2>&1||g; s|> */dev/null||g')"
+            cmd="${cmd% }"
+            printf "  ${DIM}Command:${NC} %s\n\n" "$cmd"
+            printf "  ${BOLD}Output:${NC}\n"
+            eval "$cmd" 2>&1 | head -30 | sed 's/^/  /'
+            local exit_code=$?
+            printf "\n  ${DIM}Exit code: %d${NC}\n" "$exit_code"
             ;;
 
         remove-all)
-            confirm "Remove ALL custom crons (keeping WP cron)?" || return 0
+            printf "  ${DIM}System crons (wp-cron, backup, pma-expire) will be kept.${NC}\n"
+            confirm "Remove ALL plugin cron jobs?" || return 0
             local count=0
             for f in /etc/cron.d/az-wp-*; do
                 [[ ! -f "$f" ]] && continue
-                [[ "$(basename "$f")" == "az-wp-cron" ]] && continue
+                local bn; bn="$(basename "$f")"
+                [[ "$bn" == "az-wp-cron" || "$bn" == "az-wp-backup" || "$bn" == "az-wp-pma-expire" ]] && continue
                 rm -f "$f"
                 count=$((count + 1))
             done
-            log_success "Removed $count cron jobs."
+            log_success "Removed $count plugin cron jobs."
             ;;
 
         *) log_warn "Unknown: $sub" ;;
@@ -796,13 +807,17 @@ _cron_add_line() {
     cmd="$(printf '%s' "$cron_line" | awk '{for(i=6;i<=NF;i++) printf "%s ", $i}')"
     cmd="${cmd% }"
 
+    # Strip existing redirect (will re-add at the end)
+    cmd="$(printf '%s' "$cmd" | sed 's|>>* */dev/null[^"]*||; s|2>&1||g')"
+    cmd="${cmd% }"
+
     # Auto-add --resolve if curl without it (loopback optimization)
     if [[ "$cmd" == *curl* && "$cmd" != *--resolve* && "$cmd" == *"${DOMAIN}"* ]]; then
         cmd="$(printf '%s' "$cmd" | sed "s|curl |curl -sk --resolve ${DOMAIN}:443:127.0.0.1 --max-time 30 |")"
     fi
 
-    # Ensure redirect to /dev/null
-    [[ "$cmd" != *">/dev/null"* && "$cmd" != *"> /dev/null"* ]] && cmd="$cmd > /dev/null 2>&1"
+    # Always add clean redirect
+    cmd="$cmd > /dev/null 2>&1"
 
     local cron_file="/etc/cron.d/az-wp-${cron_name}"
     printf '# az-wp cron: %s\n%s root %s\n' \
