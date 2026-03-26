@@ -54,6 +54,7 @@ wp_run() {
 # ---------------------------------------------------------------------------
 _header() { printf "\n${BOLD}  %s${NC}\n  ──────────────────────────────────────\n" "$1"; }
 
+
 # ===========================================================================
 # MAIN MENU
 # ===========================================================================
@@ -1131,22 +1132,34 @@ menu_domain() {
 menu_advanced() {
     local sub="${1:-}"
     if [[ -z "$sub" ]]; then
-        _header "Advanced Settings"
-        printf "  1) SSL Management\n"
-        printf "  2) Security (Fail2Ban, UFW)\n"
-        printf "  3) Performance (retune, TTFB, FPM, OPcache)\n"
-        printf "  4) PHP Info (config, extensions, update)\n"
-        printf "  5) Services (restart, reload)\n"
-        printf "  6) Workers (FPM pools)\n"
-        printf "  7) phpMyAdmin config\n"
-        printf "  0) Back\n\n"
-        read -rp "  Choose: " sub
-        case "$sub" in
-            1) sub="ssl" ;; 2) sub="security" ;; 3) sub="perf" ;;
-            4) sub="php" ;; 5) sub="services" ;; 6) sub="workers" ;;
-            7) sub="pma-config" ;; *) return 0 ;;
-        esac
+        # Interactive loop — stay in Advanced until Back
+        while true; do
+            _header "Advanced Settings"
+            printf "  1) SSL Management\n"
+            printf "  2) Security (Fail2Ban, UFW)\n"
+            printf "  3) Performance (retune, TTFB, FPM, OPcache)\n"
+            printf "  4) PHP Info (config, extensions, update)\n"
+            printf "  5) Services (restart, reload)\n"
+            printf "  6) Workers (FPM pools)\n"
+            printf "  7) phpMyAdmin config\n"
+            printf "  0) Back\n\n"
+            read -rp "  Choose: " sub
+            case "$sub" in
+                1) sub="ssl" ;; 2) sub="security" ;; 3) sub="perf" ;;
+                4) sub="php" ;; 5) sub="services" ;; 6) sub="workers" ;;
+                7) sub="pma-config" ;; 0|"") return 0 ;; *) continue ;;
+            esac
+            # Run the selected sub-action then loop back to Advanced menu
+            _advanced_action "$sub"
+            sub=""
+        done
+        return 0
     fi
+    _advanced_action "$sub"
+}
+
+_advanced_action() {
+    local sub="$1"
 
     case "$sub" in
         # --- SSL ---
@@ -1583,14 +1596,18 @@ main() {
             printf "\n"
             read -rp "  Choose [0-9]: " choice
             case "$choice" in
-                1) menu_status ;; 2) menu_wordpress ;; 3) menu_database ;;
-                4) menu_cache ;; 5) menu_backup ;; 6) menu_cron ;;
-                7) menu_domain ;; 8) menu_advanced ;; 9) menu_help ;;
+                1) menu_status ;;
+                2) menu_wordpress ;;
+                3) menu_database ;;
+                4) menu_cache ;;
+                5) menu_backup ;;
+                6) menu_cron ;;
+                7) menu_domain ;;
+                8) menu_advanced ;;
+                9) menu_help ;;
                 0) printf "  Goodbye!\n"; exit 0 ;;
-                *) printf "  Invalid choice.\n" ;;
+                *) ;;
             esac
-            printf "\n"
-            read -rp "  Press ENTER to continue..." _
         done
     fi
 }
