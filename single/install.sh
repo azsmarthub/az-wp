@@ -311,9 +311,80 @@ step_redis() {
 # ---------------------------------------------------------------------------
 step_wordpress() {
     install_wpcli
-    install_wordpress
-    configure_wp_extras
-    install_redis_plugin
+
+    local clone_dir="$AZ_DIR/clone"
+
+    if [[ -f "$clone_dir/database.sql.gz" && -f "$clone_dir/wp-content.tar.gz" ]]; then
+        # === CLONE MODE: restore from pre-built site ===
+        log_sub "Clone data detected — restoring from preset..."
+
+        # Download WP core
+        log_sub "Downloading WordPress core..."
+        sudo -u "$SITE_USER" wp core download --path="$WEB_ROOT" --locale=en_US 2>&1 | grep -v Deprecated || true
+
+        # Create wp-config from template
+        log_sub "Creating wp-config.php..."
+        if [[ -f "$clone_dir/wp-config-template.php" ]]; then
+            cp "$clone_dir/wp-config-template.php" "$WEB_ROOT/wp-config.php"
+            sed -i "s|CLONE_DB_NAME|${DB_NAME}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|CLONE_DB_USER|${DB_USER}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|CLONE_DB_PASS|${DB_PASS}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|CLONE_DOMAIN|${DOMAIN}|g" "$WEB_ROOT/wp-config.php"
+            # Fix Redis socket
+            sed -i "s|WP_REDIS_HOST.*|WP_REDIS_SCHEME', 'unix' );|" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
+        else
+            sudo -u "$SITE_USER" wp config create --path="$WEB_ROOT" \
+                --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASS" \
+                --dbhost="localhost" --dbprefix="oXxhsA_" 2>&1 | grep -v Deprecated || true
+        fi
+
+        # Import database
+        log_sub "Importing database (~$(stat -c%s "$clone_dir/database.sql.gz" 2>/dev/null | awk '{printf "%.1f MB", $1/1048576}'))..."
+        gunzip -c "$clone_dir/database.sql.gz" | mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
+
+        # Extract wp-content (plugins + themes + uploads)
+        log_sub "Extracting wp-content (plugins, themes, uploads)..."
+        tar xzf "$clone_dir/wp-content.tar.gz" -C "$WEB_ROOT" 2>/dev/null
+
+        # Search & replace domain
+        log_sub "Search & replace domain in database..."
+        sudo -u "$SITE_USER" wp search-replace 'productreviews.org' "$DOMAIN" --all-tables --precise --path="$WEB_ROOT" 2>&1 | grep -v Deprecated | grep -E 'Success|replacements' | head -1 || true
+        sudo -u "$SITE_USER" wp option update siteurl "https://$DOMAIN" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        sudo -u "$SITE_USER" wp option update home "https://$DOMAIN" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+
+        # Configure Redis
+        log_sub "Configuring Redis..."
+        # Remove old TCP Redis config if exists
+        sed -i "/WP_REDIS_HOST/d" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
+        sed -i "/WP_REDIS_PORT/d" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
+        sed -i "/WP_REDIS_MAXTTL/d" "$WEB_ROOT/wp-config.php" 2>/dev/null || true
+        grep -q WP_REDIS_SCHEME "$WEB_ROOT/wp-config.php" || {
+            sudo -u "$SITE_USER" wp config set WP_REDIS_SCHEME unix --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
+            sudo -u "$SITE_USER" wp config set WP_REDIS_PATH "$REDIS_SOCK" --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
+            sudo -u "$SITE_USER" wp config set WP_REDIS_DATABASE 0 --raw --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
+        }
+        sudo -u "$SITE_USER" wp config set WP_CACHE_KEY_SALT "${DOMAIN}_" --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated || true
+
+        # Enable Redis Object Cache
+        log_sub "Enabling Redis Object Cache..."
+        sudo -u "$SITE_USER" wp redis enable --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+
+        # Update plugin cache path
+        log_sub "Configuring cache path..."
+        sudo -u "$SITE_USER" wp option patch update acms_general_settings cache_path "${CACHE_PATH}/" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+
+        # Reset admin password
+        log_sub "Resetting admin password..."
+        sudo -u "$SITE_USER" wp user update 1 --user_pass="$WP_ADMIN_PASS" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+
+        log_sub "Clone restore complete."
+    else
+        # === FRESH MODE: install blank WordPress ===
+        install_wordpress
+        configure_wp_extras
+        install_redis_plugin
+    fi
+
     set_wp_permissions
     setup_wp_cron
     setup_logrotate
@@ -325,6 +396,77 @@ step_wordpress() {
     printf '# az-wp: backup every 2 days at 3:00 AM\n0 3 */2 * * root /usr/local/bin/az-wp backup full >> /var/log/az-wp/backup.log 2>&1\n' \
         > /etc/cron.d/az-wp-backup
     chmod 644 /etc/cron.d/az-wp-backup
+
+    # Setup nginx-cache-purge helper + sudoers
+    log_sub "Setting up cache helpers..."
+    cat > /usr/local/bin/nginx-cache-purge <<'SCRIPT'
+#!/bin/bash
+CACHE_DIR="${1:-/dev/null}"
+ACTION="${2:-help}"
+case "$ACTION" in
+    purge-all) rm -rf "${CACHE_DIR}"/* 2>/dev/null; echo 'purged' ;;
+    count)     find "$CACHE_DIR" -type f 2>/dev/null | wc -l ;;
+    size)      du -sb "$CACHE_DIR" 2>/dev/null | awk '{print $1}' ;;
+    list)      find "$CACHE_DIR" -type f 2>/dev/null ;;
+    exists)    [[ -d "$CACHE_DIR" ]] && echo 'yes' || echo 'no' ;;
+    *)         echo 'Usage: nginx-cache-purge [cache_dir] purge-all|count|size|list|exists' ;;
+esac
+SCRIPT
+    chmod +x /usr/local/bin/nginx-cache-purge
+
+    # Sudoers for cache helper
+    printf '%s ALL=(root) NOPASSWD: /usr/local/bin/nginx-cache-purge\n' "$SITE_USER" \
+        > /etc/sudoers.d/nginx-cache-purge
+    chmod 440 /etc/sudoers.d/nginx-cache-purge
+
+    # Cache stats cron
+    cat > /etc/cron.d/az-wp-cache-stats <<CRON
+# az-wp: update cache stats every 5 minutes
+*/5 * * * * root /usr/local/bin/nginx-cache-purge ${CACHE_PATH} count > /tmp/az-cache-count && /usr/local/bin/nginx-cache-purge ${CACHE_PATH} size > /tmp/az-cache-size && printf '{"files":%s,"size":%s,"updated":"%s"}' "\$(cat /tmp/az-cache-count)" "\$(cat /tmp/az-cache-size)" "\$(date '+%Y-%m-%d %H:%M:%S')" > /home/${SITE_USER}/cache/cache-stats.json 2>/dev/null
+CRON
+    chmod 644 /etc/cron.d/az-wp-cache-stats
+
+    # Install AffiliateCMS crons if clone mode (site has the plugins)
+    if [[ -f "$clone_dir/database.sql.gz" ]]; then
+        log_sub "Installing AffiliateCMS cron jobs..."
+        local api_token
+        api_token="$(sudo -u "$SITE_USER" wp option get acms_api_token --path="$WEB_ROOT" 2>/dev/null | grep -v Deprecated | tr -d '[:space:]')" || api_token=""
+
+        if [[ -n "$api_token" ]]; then
+            local base="curl -sk --resolve ${DOMAIN}:443:127.0.0.1"
+            local url="https://${DOMAIN}"
+            local presets=(
+                "scrape|*/5 * * * *|/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
+                "scrape-monitor|*/5 * * * *|/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor"
+                "queue-processor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Queue processor"
+                "queue-monitor|*/5 * * * *|/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Queue monitor"
+                "product-ai|*/10 * * * *|/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
+                "post-ai|*/10 * * * *|/wp-json/acms/v1/cron/post-ai|30|GET|Post AI"
+                "category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/process-category-ai|30|GET|Category AI"
+                "brand-ai|*/10 * * * *|/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI"
+                "brand-category-ai|*/10 * * * *|/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
+                "quick-update|*/30 * * * *|/wp-json/acms/v1/cron/quick-update|60|GET|Quick update"
+                "retry-stuck|*/10 * * * *|/wp-json/acms-cat/v1/cron/retry-stuck|30|GET|Retry stuck"
+                "bulk-update|* * * * *|/wp-json/acms-cat/v1/cron/bulk-update-worker|90|GET|Bulk update"
+                "cache-preload|0 3 * * 0|/wp-json/acms/v1/cache/preload|30|GET|Cache preload"
+                "cache-refresh|0 */4 * * *|/wp-json/acms/v1/cache/smart-refresh|30|POST|Cache refresh"
+                "cache-resume|*/30 * * * *|/wp-json/acms/v1/cache/resume-queue|30|POST|Cache resume"
+            )
+            local p
+            for p in "${presets[@]}"; do
+                IFS='|' read -r name sched endpoint max_time method desc <<< "$p"
+                local curl_cmd="${base} --max-time ${max_time}"
+                [[ "$method" == "POST" ]] && curl_cmd="${curl_cmd} -X POST"
+                printf '# az-wp cron: %s\n%s root %s "%s%s?token=%s" > /dev/null 2>&1\n' \
+                    "$desc" "$sched" "$curl_cmd" "$url" "$endpoint" "$api_token" \
+                    > "/etc/cron.d/az-wp-${name}"
+                chmod 644 "/etc/cron.d/az-wp-${name}"
+            done
+            log_sub "Installed 15 AffiliateCMS cron jobs."
+        else
+            log_warn "API token not found — skip cron preset. Install later: az-wp cron preset"
+        fi
+    fi
 }
 
 # ---------------------------------------------------------------------------
