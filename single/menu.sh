@@ -256,11 +256,15 @@ menu_database() {
 
     case "$sub" in
         pma)
-            local pma_path; pma_path="$(state_get PMA_PATH 2>/dev/null)" || pma_path=""
+            local pma_path pma_expiry
+            pma_path="$(state_get PMA_PATH 2>/dev/null)" || pma_path=""
+            pma_expiry="$(state_get PMA_EXPIRY 2>/dev/null)" || pma_expiry=""
             if [[ -z "$pma_path" || ! -f /etc/nginx/az-wp-pma.conf ]]; then
                 _pma_enable
             else
-                printf "\n  ${BOLD}phpMyAdmin:${NC} https://%s%s/\n\n" "$DOMAIN" "$pma_path"
+                printf "\n  ${BOLD}phpMyAdmin:${NC} https://%s%s/\n" "$DOMAIN" "$pma_path"
+                [[ -n "$pma_expiry" ]] && printf "  ${DIM}Expires: %s${NC}\n" "$pma_expiry"
+                printf "  ${DIM}Regenerate: az-wp advanced pma-config regenerate${NC}\n\n"
             fi
             ;;
         optimize)
@@ -917,7 +921,14 @@ _pma_enable() {
         log_success "phpMyAdmin installed."
     fi
 
-    local pma_path="/pma-$(openssl rand -hex 8)"
+    # Generate base64 URL path (stronger than hex, URL-safe)
+    local pma_rand
+    pma_rand="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-24)"
+    local pma_path="/db-${pma_rand}"
+
+    # Record expiry (24 hours from now)
+    local pma_expiry
+    pma_expiry="$(date -d '+24 hours' '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -v+24H '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
 
     # FPM pool
     local pma_pool="/etc/php/${PHP_VERSION}/fpm/pool.d/phpmyadmin.conf"
@@ -944,7 +955,7 @@ FPMPOOL
 
     # Nginx snippet
     cat > /etc/nginx/az-wp-pma.conf <<PMACONF
-    # phpMyAdmin — managed by az-wp
+    # phpMyAdmin — managed by az-wp (expires: ${pma_expiry})
     location ^~ ${pma_path}/ {
         alias /usr/share/phpmyadmin/;
         index index.php;
@@ -975,6 +986,15 @@ PMACONF
 \$cfg['Servers'][1]['AllowNoPassword'] = false;
 PHPCFG
 
+    # Setup auto-disable cron (24h)
+    local disable_at
+    disable_at="$(date -d '+24 hours' '+%M %H %d %m *' 2>/dev/null || date -v+24H '+%M %H %d %m *' 2>/dev/null)"
+    cat > /etc/cron.d/az-wp-pma-expire <<CRONCFG
+# az-wp: auto-disable phpMyAdmin after 24h
+${disable_at} root /usr/local/bin/az-wp advanced pma-config disable > /dev/null 2>&1 && rm -f /etc/cron.d/az-wp-pma-expire
+CRONCFG
+    chmod 644 /etc/cron.d/az-wp-pma-expire
+
     if nginx -t 2>/dev/null; then
         service_reload nginx
     else
@@ -985,8 +1005,10 @@ PHPCFG
     fi
 
     state_set "PMA_PATH" "$pma_path"
-    log_success "phpMyAdmin enabled."
-    printf "\n  ${BOLD}URL:${NC} https://%s%s/\n\n" "$DOMAIN" "$pma_path"
+    state_set "PMA_EXPIRY" "$pma_expiry"
+    log_success "phpMyAdmin enabled (auto-disables in 24h)."
+    printf "\n  ${BOLD}URL:${NC} https://%s%s/\n" "$DOMAIN" "$pma_path"
+    printf "  ${DIM}Expires: %s${NC}\n\n" "$pma_expiry"
 }
 
 # ===========================================================================
