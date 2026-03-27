@@ -1999,6 +1999,7 @@ This is a test message from azwp security scanner."
                 printf "  1) Check cache rule status\n"
                 printf "  2) Purge Cloudflare cache\n"
                 printf "  3) Reconfigure\n"
+                printf "  4) Remove (delete credentials + cache rule)\n"
                 printf "  0) Back\n\n"
                 local cf_sub
                 read -rp "  Choose: " cf_sub
@@ -2022,6 +2023,19 @@ This is a test message from azwp security scanner."
                         log_success "Cloudflare cache purged."
                         ;;
                     3) cf_key_saved="" ;; # fall through to setup
+                    4)
+                        confirm "Remove Cloudflare integration? This deletes the cache rule." || return 0
+                        # Delete cache rule
+                        curl -sf -X PUT \
+                            "https://api.cloudflare.com/client/v4/zones/${cf_zone}/rulesets/phases/http_request_cache_settings/entrypoint" \
+                            -H "X-Auth-Email: ${cf_email_saved}" -H "X-Auth-Key: ${cf_key_saved}" \
+                            -H "Content-Type: application/json" \
+                            -d '{"rules":[]}' > /dev/null 2>&1 || true
+                        # Remove credentials
+                        sed -i '/^CF_/d' "$AZ_CONFIG_FILE" 2>/dev/null || true
+                        log_success "Cloudflare credentials and cache rule removed."
+                        return 0
+                        ;;
                     *) return 0 ;;
                 esac
                 [[ -n "$cf_key_saved" ]] && return 0
