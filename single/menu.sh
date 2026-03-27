@@ -1366,7 +1366,10 @@ menu_domain() {
 
     # Update cache_path in serialized option (wp option patch may fail on serialized data)
     wp_run eval "\$s = get_option('acms_general_settings', []); \$s['cache_path'] = '${new_cache}/'; update_option('acms_general_settings', \$s);" > /dev/null 2>/dev/null || true
+    # Flush object cache + transients (Redis may cache stale serialized data)
+    wp_run transient delete --all > /dev/null 2>/dev/null || true
     wp_run cache flush > /dev/null 2>/dev/null || true
+    redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
 
     # === Step 11: Security scanner ===
     log_sub "11/14 Updating security scanner..."
@@ -1477,7 +1480,7 @@ menu_domain() {
 
     # MySQL user
     if [[ -n "${new_db_user:-}" ]]; then
-        if mysql -e "SELECT 1" -u "$new_db_user" -p"${db_pass}" "${db_name}" &>/dev/null; then
+        if mysql -e "SELECT 1" -u "$new_db_user" -p"${db_pass}" "${new_db_name}" &>/dev/null; then
             printf "  ${GREEN}OK${NC}  MySQL user:  %s\n" "$new_db_user"
         else
             printf "  ${RED}!!${NC}  MySQL user:  %s (login failed)\n" "$new_db_user"
