@@ -1172,47 +1172,119 @@ menu_domain() {
     [[ "$new_domain" == "$DOMAIN" ]] && { log_warn "Same as current domain."; return; }
 
     local old_domain="$DOMAIN"
+    local old_user="$SITE_USER"
     local old_web_root="$WEB_ROOT"
-    local new_web_root="/home/${SITE_USER}/${new_domain}"
+    local old_home="/home/${old_user}"
+
+    # Derive new user from domain (same logic as install.sh)
+    local new_user
+    new_user="$(echo "$new_domain" | tr '.' '_' | tr '-' '_')"
+    local new_home="/home/${new_user}"
+    local new_web_root="${new_home}/${new_domain}"
+    local new_cache="/home/${new_user}/cache/fastcgi"
 
     printf "\n  ${BOLD}Changes:${NC}\n"
     printf "    Domain:      %s → %s\n" "$old_domain" "$new_domain"
+    printf "    User:        %s → %s\n" "$old_user" "$new_user"
+    printf "    Home:        %s → %s\n" "$old_home" "$new_home"
     printf "    Web root:    %s → %s\n" "$old_web_root" "$new_web_root"
     printf "    Database:    search & replace all URLs\n"
-    printf "    Nginx:       new server_name + config file\n"
+    printf "    MySQL user:  rename + regrant\n"
+    printf "    Nginx:       re-render from template\n"
+    printf "    PHP-FPM:     re-render pool configs\n"
     printf "    SSL:         new certificate\n"
-    printf "    Cron:        update all domain references\n"
-    printf "    Cache:       flush FastCGI + Redis + OPcache + preload queue\n"
-    printf "    Security:    update scanner domain\n"
+    printf "    Cron:        update all references\n"
+    printf "    Cache:       flush all + update paths\n"
+    printf "    Security:    update scanner\n"
     printf "    Cloudflare:  update cache rule (if configured)\n\n"
 
     confirm "Proceed with domain change?" || return 0
 
     # === Step 1: Database search & replace ===
-    log_sub "1/12 Replacing in database: $old_domain → $new_domain ..."
+    log_sub "1/14 Replacing in database: $old_domain → $new_domain ..."
     wp_run search-replace "$old_domain" "$new_domain" --all-tables --precise > /dev/null
     wp_run search-replace "http://$old_domain" "https://$new_domain" --all-tables --precise > /dev/null
 
     # === Step 2: WordPress URLs ===
-    log_sub "2/12 Updating WordPress site URL..."
+    log_sub "2/14 Updating WordPress site URL..."
     wp_run option update siteurl "https://$new_domain" > /dev/null
     wp_run option update home "https://$new_domain" > /dev/null
 
-    # === Step 3: Rename web root directory ===
-    log_sub "3/12 Renaming web root..."
-    if [[ "$old_web_root" != "$new_web_root" && -d "$old_web_root" ]]; then
-        mv "$old_web_root" "$new_web_root"
+    # === Step 3: Rename Linux user + home directory ===
+    log_sub "3/14 Renaming system user: $old_user → $new_user ..."
+    if [[ "$old_user" != "$new_user" ]]; then
+        # Stop services that hold files open
+        systemctl stop "php${PHP_VERSION}-fpm" 2>/dev/null || true
+
+        # Rename group first, then user
+        groupmod -n "$new_user" "$old_user" 2>/dev/null || true
+        usermod -l "$new_user" -d "$new_home" -m "$old_user" 2>/dev/null || true
+
+        # Rename web root inside new home
+        if [[ -d "${new_home}/${old_domain}" ]]; then
+            mv "${new_home}/${old_domain}" "${new_home}/${new_domain}"
+        fi
+
+        # Update cache dir path
+        mkdir -p "$new_cache"
+        chown "${new_user}:${new_user}" "$new_cache"
+
+        # Re-add to redis group
+        usermod -aG redis "$new_user" 2>/dev/null || true
+
+        SITE_USER="$new_user"
+        WEB_ROOT="$new_web_root"
+        CACHE_PATH="$new_cache"
+    else
+        # Same user, just rename web root dir
+        if [[ "$old_web_root" != "$new_web_root" && -d "$old_web_root" ]]; then
+            mv "$old_web_root" "$new_web_root"
+        fi
         WEB_ROOT="$new_web_root"
     fi
 
-    # === Step 4: Nginx config (re-render from template — safer than sed) ===
-    log_sub "4/12 Rebuilding Nginx configuration..."
+    # === Step 4: MySQL user rename ===
+    log_sub "4/14 Renaming MySQL user..."
+    local old_db_user new_db_user db_name db_pass
+    old_db_user="$(state_get DB_USER 2>/dev/null)" || old_db_user=""
+    db_pass="$(state_get DB_PASS 2>/dev/null)" || db_pass=""
+    db_name="$(state_get DB_NAME 2>/dev/null)" || db_name=""
+    new_db_user="wp_$(echo "$new_user" | cut -c1-11)"
+
+    if [[ -n "$old_db_user" && "$old_db_user" != "$new_db_user" && -n "$db_pass" ]]; then
+        mysql -e "RENAME USER '${old_db_user}'@'localhost' TO '${new_db_user}'@'localhost';" 2>/dev/null || true
+        # Update wp-config.php
+        wp_run config set DB_USER "$new_db_user" --type=constant > /dev/null 2>/dev/null || true
+        state_set "DB_USER" "$new_db_user"
+    fi
+
+    # === Step 5: PHP-FPM pool configs ===
+    log_sub "5/14 Updating PHP-FPM pools..."
+    local pool_dir="/etc/php/${PHP_VERSION}/fpm/pool.d"
+    for pool_file in "$pool_dir/web.conf" "$pool_dir/workers.conf"; do
+        if [[ -f "$pool_file" ]]; then
+            sed -i "s|${old_user}|${new_user}|g" "$pool_file" 2>/dev/null || true
+        fi
+    done
+
+    # Sudoers for nginx-cache-purge
+    if [[ -f /etc/sudoers.d/nginx-cache-purge ]]; then
+        sed -i "s|${old_user}|${new_user}|g" /etc/sudoers.d/nginx-cache-purge 2>/dev/null || true
+    fi
+
+    # open_basedir
+    local php_ini="/etc/php/${PHP_VERSION}/fpm/conf.d/99-azwp.ini"
+    if [[ -f "$php_ini" ]]; then
+        sed -i "s|/home/${old_user}|/home/${new_user}|g" "$php_ini" 2>/dev/null || true
+    fi
+
+    # === Step 6: Nginx config (re-render from template) ===
+    log_sub "6/14 Rebuilding Nginx configuration..."
     local new_conf="/etc/nginx/sites-available/${new_domain}.conf"
 
     export DOMAIN="$new_domain" WEB_ROOT="$new_web_root" PHP_VERSION
     envsubst '$DOMAIN $WEB_ROOT $PHP_VERSION' < "${AZ_DIR}/templates/nginx/site.conf.tpl" > "$new_conf"
 
-    # Remove old config and symlink
     rm -f "/etc/nginx/sites-available/${old_domain}.conf" 2>/dev/null
     rm -f "/etc/nginx/sites-enabled/${old_domain}.conf" 2>/dev/null
     ln -sf "$new_conf" "/etc/nginx/sites-enabled/${new_domain}.conf"
@@ -1222,72 +1294,57 @@ menu_domain() {
         sed -i '/^}$/i \    include /etc/nginx/azwp-pma.conf;' "$new_conf" 2>/dev/null || true
     fi
 
-    # Make sure nginx works before SSL
     nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null
 
-    # === Step 5: SSL certificate ===
-    log_sub "5/12 Issuing new SSL certificate..."
+    # === Step 7: SSL certificate ===
+    log_sub "7/14 Issuing new SSL certificate..."
     PUBLIC_IP="$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null)" || PUBLIC_IP=""
     DOMAIN="$new_domain"
     WP_ADMIN_EMAIL="$(state_get WP_ADMIN_EMAIL 2>/dev/null)" || true
     issue_certificate 2>/dev/null || log_warn "SSL issue failed. Run 'azwp advanced ssl issue' later."
 
-    # === Step 6: Cron jobs ===
-    log_sub "6/12 Updating cron jobs..."
+    # === Step 8: Cron jobs ===
+    log_sub "8/14 Updating cron jobs..."
     for f in /etc/cron.d/azwp-*; do
-        [[ -f "$f" ]] && sed -i "s|${old_domain}|${new_domain}|g" "$f"
+        if [[ -f "$f" ]]; then
+            sed -i "s|${old_domain}|${new_domain}|g" "$f"
+            sed -i "s|/home/${old_user}|/home/${new_user}|g" "$f"
+            sed -i "s| ${old_user} | ${new_user} |g" "$f"
+        fi
     done
-    # Update wp-cron path
-    if [[ -f /etc/cron.d/azwp-cron ]]; then
-        sed -i "s|${old_web_root}|${new_web_root}|g" /etc/cron.d/azwp-cron
-    fi
 
-    # === Step 7: Cache ===
-    log_sub "7/12 Flushing caches..."
-    rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
+    # === Step 9: Cache ===
+    log_sub "9/14 Flushing caches..."
+    rm -rf "${new_cache:?}"/* 2>/dev/null || true
     redis-cli -s "$REDIS_SOCK" FLUSHDB > /dev/null 2>&1 || true
     wp_run config set WP_CACHE_KEY_SALT "${new_domain}_" > /dev/null
 
-    # Clear preload queue (contains old domain URLs)
-    local preload_queue="${new_web_root}/wp-content/uploads/acms-preload-queue.txt"
-    rm -f "$preload_queue" 2>/dev/null || true
+    # Clear preload queue
+    rm -f "${new_web_root}/wp-content/uploads/acms-preload-queue.txt" 2>/dev/null || true
     wp_run option delete acms_preload_meta > /dev/null 2>/dev/null || true
 
-    # Regenerate cache-stats.json with real data
     _refresh_cache_stats
 
-    # Update cache-stats cron if exists
     if [[ -f /etc/cron.d/azwp-cache-stats ]]; then
-        sed -i "s|${old_web_root}|${new_web_root}|g" /etc/cron.d/azwp-cache-stats 2>/dev/null || true
+        sed -i "s|/home/${old_user}|/home/${new_user}|g" /etc/cron.d/azwp-cache-stats 2>/dev/null || true
     fi
 
-    # === Step 8: Update WordPress config ===
-    log_sub "8/12 Updating wp-config.php..."
-    # Update open_basedir path in PHP ini (if web root changed)
-    if [[ "$old_web_root" != "$new_web_root" ]]; then
-        local php_ini="/etc/php/${PHP_VERSION}/fpm/conf.d/99-azwp.ini"
-        if [[ -f "$php_ini" ]]; then
-            sed -i "s|${old_web_root}|${new_web_root}|g" "$php_ini" 2>/dev/null || true
-        fi
-    fi
-
-    # Reset OPcache (stale bytecode may reference old paths)
+    # === Step 10: WordPress config ===
+    log_sub "10/14 Updating WordPress config..."
+    # Restart FPM (clears OPcache + applies new pool configs)
     systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
 
-    # Update plugin cache_path setting
-    wp_run option patch update acms_general_settings cache_path "${CACHE_PATH}/" > /dev/null 2>/dev/null || true
+    wp_run option patch update acms_general_settings cache_path "${new_cache}/" > /dev/null 2>/dev/null || true
 
-    # === Step 9: Security scanner ===
-    log_sub "9/12 Updating security scanner..."
+    # === Step 11: Security scanner ===
+    log_sub "11/14 Updating security scanner..."
     if [[ -x /usr/local/bin/azwp-security-scan ]]; then
         sed -i "s|${old_domain}|${new_domain}|g" /usr/local/bin/azwp-security-scan 2>/dev/null || true
-        if [[ "$old_web_root" != "$new_web_root" ]]; then
-            sed -i "s|${old_web_root}|${new_web_root}|g" /usr/local/bin/azwp-security-scan 2>/dev/null || true
-        fi
+        sed -i "s|/home/${old_user}|/home/${new_user}|g" /usr/local/bin/azwp-security-scan 2>/dev/null || true
     fi
 
-    # === Step 10: Cloudflare cache rule ===
-    log_sub "10/12 Updating Cloudflare cache rule..."
+    # === Step 12: Cloudflare cache rule ===
+    log_sub "12/14 Updating Cloudflare cache rule..."
     local cf_zone cf_email cf_key
     cf_email="$(config_get CF_EMAIL 2>/dev/null)" || cf_email=""
     cf_key="$(config_get CF_API_KEY 2>/dev/null)" || cf_key=""
@@ -1302,7 +1359,6 @@ menu_domain() {
             -d "{\"rules\":[{\"expression\":\"${cf_expr}\",\"description\":\"azwp-cache: Public pages for ${new_domain}\",\"action\":\"set_cache_settings\",\"action_parameters\":{\"cache\":true,\"edge_ttl\":{\"mode\":\"override_origin\",\"default\":86400},\"browser_ttl\":{\"mode\":\"override_origin\",\"default\":600}}}]}" 2>/dev/null)" || true
         if echo "$rule_response" | grep -q '"success":true\|"success": true'; then
             log_success "Cloudflare cache rule updated for $new_domain"
-            # Purge old domain cache
             curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/${cf_zone}/purge_cache" \
                 -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_key}" \
                 -H "Content-Type: application/json" \
@@ -1314,17 +1370,22 @@ menu_domain() {
         printf "    ${DIM}No Cloudflare credentials saved — skipped${NC}\n"
     fi
 
-    # === Step 11: Cleanup ===
-    log_sub "11/12 Cleaning up old files..."
-    # Remove old nginx error log (new one auto-created by nginx)
+    # === Step 13: Cleanup ===
+    log_sub "13/14 Cleaning up..."
     rm -f "/var/log/nginx/${old_domain}-error.log" 2>/dev/null || true
+    # Remove old home if empty (user was moved)
+    [[ "$old_home" != "$new_home" && -d "$old_home" ]] && rmdir "$old_home" 2>/dev/null || true
 
-    # === Step 12: State file ===
-    log_sub "12/12 Updating state file..."
+    # === Step 14: State file ===
+    log_sub "14/14 Updating state file..."
     state_set "DOMAIN" "$new_domain"
+    state_set "SITE_USER" "$new_user"
     state_set "WEB_ROOT" "$new_web_root"
+    state_set "CACHE_PATH" "$new_cache"
     DOMAIN="$new_domain"
+    SITE_USER="$new_user"
     WEB_ROOT="$new_web_root"
+    CACHE_PATH="$new_cache"
 
     # Reload nginx
     if nginx -t 2>/dev/null; then
@@ -1373,6 +1434,22 @@ menu_domain() {
         printf "  ${GREEN}OK${NC}  Web root:    %s\n" "$new_web_root"
     else
         printf "  ${RED}!!${NC}  Web root:    %s (NOT FOUND)\n" "$new_web_root"
+    fi
+
+    # System user
+    if id "$new_user" &>/dev/null; then
+        printf "  ${GREEN}OK${NC}  User:        %s (uid=%s)\n" "$new_user" "$(id -u "$new_user")"
+    else
+        printf "  ${RED}!!${NC}  User:        %s NOT FOUND\n" "$new_user"
+    fi
+
+    # MySQL user
+    if [[ -n "${new_db_user:-}" ]]; then
+        if mysql -e "SELECT 1" -u "$new_db_user" -p"${db_pass}" "${db_name}" &>/dev/null; then
+            printf "  ${GREEN}OK${NC}  MySQL user:  %s\n" "$new_db_user"
+        else
+            printf "  ${RED}!!${NC}  MySQL user:  %s (login failed)\n" "$new_db_user"
+        fi
     fi
 
     # SSL
