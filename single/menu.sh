@@ -1204,6 +1204,11 @@ menu_domain() {
     log_sub "1/14 Replacing in database: $old_domain → $new_domain ..."
     wp_run search-replace "$old_domain" "$new_domain" --all-tables --precise > /dev/null
     wp_run search-replace "http://$old_domain" "https://$new_domain" --all-tables --precise > /dev/null
+    # Replace old user path in DB (serialized options like cache_path)
+    if [[ "$old_user" != "$new_user" ]]; then
+        wp_run search-replace "/home/${old_user}" "/home/${new_user}" --all-tables --precise > /dev/null 2>/dev/null || true
+    fi
+    wp_run cache flush > /dev/null 2>/dev/null || true
 
     # === Step 2: WordPress URLs ===
     log_sub "2/14 Updating WordPress site URL..."
@@ -1359,7 +1364,9 @@ menu_domain() {
     # Restart FPM (clears OPcache + applies new pool configs)
     systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null
 
-    wp_run option patch update acms_general_settings cache_path "${new_cache}/" > /dev/null 2>/dev/null || true
+    # Update cache_path in serialized option (wp option patch may fail on serialized data)
+    wp_run eval "\$s = get_option('acms_general_settings', []); \$s['cache_path'] = '${new_cache}/'; update_option('acms_general_settings', \$s);" > /dev/null 2>/dev/null || true
+    wp_run cache flush > /dev/null 2>/dev/null || true
 
     # === Step 11: Security scanner ===
     log_sub "11/14 Updating security scanner..."
