@@ -1210,10 +1210,18 @@ menu_domain() {
     fi
     wp_run cache flush > /dev/null 2>/dev/null || true
 
-    # === Step 2: WordPress URLs ===
+    # === Step 2: WordPress URLs + admin email ===
     log_sub "2/14 Updating WordPress site URL..."
     wp_run option update siteurl "https://$new_domain" > /dev/null
     wp_run option update home "https://$new_domain" > /dev/null
+
+    # Update admin email if it matches the old domain pattern (admin@old_domain)
+    local current_email
+    current_email="$(wp_run option get admin_email 2>/dev/null | tr -d '[:space:]')" || current_email=""
+    if [[ "$current_email" == "admin@${old_domain}" ]]; then
+        wp_run option update admin_email "admin@${new_domain}" > /dev/null
+        state_set "WP_ADMIN_EMAIL" "admin@${new_domain}"
+    fi
 
     # === Step 3: Rename Linux user + home directory ===
     log_sub "3/14 Renaming system user: $old_user → $new_user ..."
