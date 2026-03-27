@@ -1243,18 +1243,38 @@ menu_domain() {
         WEB_ROOT="$new_web_root"
     fi
 
-    # === Step 4: MySQL user rename ===
-    log_sub "4/14 Renaming MySQL user..."
-    local old_db_user new_db_user db_name db_pass
+    # === Step 4: MySQL user + database rename ===
+    log_sub "4/14 Renaming MySQL user + database..."
+    local old_db_user new_db_user old_db_name new_db_name db_pass
     old_db_user="$(state_get DB_USER 2>/dev/null)" || old_db_user=""
+    old_db_name="$(state_get DB_NAME 2>/dev/null)" || old_db_name=""
     db_pass="$(state_get DB_PASS 2>/dev/null)" || db_pass=""
-    db_name="$(state_get DB_NAME 2>/dev/null)" || db_name=""
     new_db_user="wp_$(echo "$new_user" | cut -c1-11)"
+    new_db_name="$new_db_user"
 
     if [[ -n "$old_db_user" && "$old_db_user" != "$new_db_user" && -n "$db_pass" ]]; then
+        # Rename user
         mysql -e "RENAME USER '${old_db_user}'@'localhost' TO '${new_db_user}'@'localhost';" 2>/dev/null || true
+
+        # Rename database (MySQL has no RENAME DATABASE — move tables)
+        if [[ -n "$old_db_name" && "$old_db_name" != "$new_db_name" ]]; then
+            mysql -e "CREATE DATABASE IF NOT EXISTS \`${new_db_name}\`;" 2>/dev/null || true
+            local _tables
+            _tables="$(mysql -N -e "SHOW TABLES FROM \`${old_db_name}\`" 2>/dev/null)" || _tables=""
+            for _t in $_tables; do
+                mysql -e "RENAME TABLE \`${old_db_name}\`.\`${_t}\` TO \`${new_db_name}\`.\`${_t}\`;" 2>/dev/null || true
+            done
+            mysql -e "DROP DATABASE IF EXISTS \`${old_db_name}\`;" 2>/dev/null || true
+        fi
+
+        # Update grants
+        mysql -e "GRANT ALL PRIVILEGES ON \`${new_db_name}\`.* TO '${new_db_user}'@'localhost';" 2>/dev/null || true
+        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+
         # Update wp-config.php
+        wp_run config set DB_NAME "$new_db_name" --type=constant > /dev/null 2>/dev/null || true
         wp_run config set DB_USER "$new_db_user" --type=constant > /dev/null 2>/dev/null || true
+        state_set "DB_NAME" "$new_db_name"
         state_set "DB_USER" "$new_db_user"
     fi
 
@@ -1270,6 +1290,11 @@ menu_domain() {
     # Sudoers for nginx-cache-purge
     if [[ -f /etc/sudoers.d/nginx-cache-purge ]]; then
         sed -i "s|${old_user}|${new_user}|g" /etc/sudoers.d/nginx-cache-purge 2>/dev/null || true
+    fi
+
+    # FastCGI cache zone config (references cache path)
+    if [[ -f /etc/nginx/conf.d/fastcgi-cache.conf ]]; then
+        sed -i "s|/home/${old_user}|/home/${new_user}|g" /etc/nginx/conf.d/fastcgi-cache.conf 2>/dev/null || true
     fi
 
     # open_basedir
