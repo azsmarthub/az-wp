@@ -2356,7 +2356,9 @@ This is a test message from azwp security scanner."
                 fi
 
                 if $has_key && $has_ssh_remote; then
-                    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_file" -T git@github.com 2>&1 | grep -qi "success\|granted"; then
+                    local _ssh_out
+                    _ssh_out="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -i "$key_file" -T git@github.com 2>&1 || true)"
+                    if echo "$_ssh_out" | grep -qi "success\|granted"; then
                         access_ok=true
                         printf "  Access:  ${GREEN}Connected${NC}\n"
                     else
