@@ -2327,87 +2327,84 @@ This is a test message from azwp security scanner."
         deploy-key)
             local dk_sub="${extra}"
             local key_file="/root/.ssh/azwp_deploy"
+            local az_dir; az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
+            local has_key=false
+            local has_ssh_remote=false
+            local access_ok=false
+            local remote_url; remote_url="$(cd "$az_dir" && git remote get-url origin 2>/dev/null || echo "")"
+
+            [[ -f "${key_file}.pub" ]] && has_key=true
+            [[ "$remote_url" == git@* ]] && has_ssh_remote=true
 
             if [[ -z "$dk_sub" ]]; then
                 _header "GitHub Deploy Key"
 
-                if [[ -f "${key_file}.pub" ]]; then
-                    printf "  Status: ${GREEN}Key exists${NC}\n"
-                    printf "  File:   ${key_file}\n\n"
-                    printf "  ${BOLD}Public key:${NC}\n"
-                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
-
-                    # Check if git remote is SSH
-                    local az_dir; az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
-                    local remote_url; remote_url="$(cd "$az_dir" && git remote get-url origin 2>/dev/null || echo "")"
-                    if [[ "$remote_url" == git@* ]]; then
-                        printf "  Remote:  ${GREEN}SSH${NC} (%s)\n" "$remote_url"
-                        # Test connection
-                        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_file" -T git@github.com 2>&1 | grep -qi "success\|granted"; then
-                            printf "  Access:  ${GREEN}Verified${NC}\n"
-                        else
-                            printf "  Access:  ${YELLOW}Not verified${NC} (key may not be added to GitHub yet)\n"
-                        fi
-                    else
-                        printf "  Remote:  ${YELLOW}HTTPS${NC} (%s)\n" "$remote_url"
-                        printf "  ${DIM}Switch to SSH with option 3 below.${NC}\n"
-                    fi
+                # --- Status dashboard ---
+                if $has_key; then
+                    printf "  Key:     ${GREEN}Installed${NC} (${key_file})\n"
+                    # Fingerprint
+                    local fp; fp="$(ssh-keygen -lf "${key_file}.pub" 2>/dev/null | awk '{print $2}')" || fp=""
+                    [[ -n "$fp" ]] && printf "  ID:      ${DIM}%s${NC}\n" "$fp"
                 else
-                    printf "  Status: ${RED}No deploy key found${NC}\n"
+                    printf "  Key:     ${RED}Not installed${NC}\n"
                 fi
 
-                printf "\n  1) Generate new deploy key\n"
-                printf "  2) Show public key (copy to GitHub)\n"
-                printf "  3) Switch repo to SSH + configure\n"
-                printf "  4) Test GitHub connection\n"
-                printf "  0) Back\n\n"
-                read -rp "  Choose: " dk_sub
-                case "$dk_sub" in 1) dk_sub="generate" ;; 2) dk_sub="show" ;; 3) dk_sub="setup" ;; 4) dk_sub="test" ;; *) return 0 ;; esac
+                if $has_ssh_remote; then
+                    printf "  Remote:  ${GREEN}SSH${NC} (%s)\n" "$remote_url"
+                else
+                    printf "  Remote:  ${YELLOW}HTTPS${NC} (%s)\n" "$remote_url"
+                fi
+
+                if $has_key && $has_ssh_remote; then
+                    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_file" -T git@github.com 2>&1 | grep -qi "success\|granted"; then
+                        access_ok=true
+                        printf "  Access:  ${GREEN}Connected${NC}\n"
+                    else
+                        printf "  Access:  ${RED}Failed${NC} (key not added to GitHub?)\n"
+                    fi
+                elif $has_key; then
+                    printf "  Access:  ${YELLOW}Not configured${NC} (remote still HTTPS)\n"
+                fi
+
+                # --- Context-aware menu ---
+                printf "\n"
+                if ! $has_key; then
+                    printf "  1) Setup (generate key + configure SSH + switch to SSH)\n"
+                    printf "  0) Back\n\n"
+                    read -rp "  Choose: " dk_sub
+                    case "$dk_sub" in 1) dk_sub="setup" ;; *) return 0 ;; esac
+                elif ! $has_ssh_remote; then
+                    printf "  1) Configure SSH + switch remote\n"
+                    printf "  2) Show public key (copy to GitHub)\n"
+                    printf "  3) Test connection\n"
+                    printf "  4) Regenerate key (replace current)\n"
+                    printf "  5) Remove key\n"
+                    printf "  0) Back\n\n"
+                    read -rp "  Choose: " dk_sub
+                    case "$dk_sub" in 1) dk_sub="setup" ;; 2) dk_sub="show" ;; 3) dk_sub="test" ;; 4) dk_sub="regenerate" ;; 5) dk_sub="remove" ;; *) return 0 ;; esac
+                else
+                    printf "  1) Test connection\n"
+                    printf "  2) Show public key\n"
+                    printf "  3) Regenerate key (replace current)\n"
+                    printf "  4) Switch back to HTTPS\n"
+                    printf "  5) Remove key\n"
+                    printf "  0) Back\n\n"
+                    read -rp "  Choose: " dk_sub
+                    case "$dk_sub" in 1) dk_sub="test" ;; 2) dk_sub="show" ;; 3) dk_sub="regenerate" ;; 4) dk_sub="to-https" ;; 5) dk_sub="remove" ;; *) return 0 ;; esac
+                fi
             fi
 
             case "$dk_sub" in
-                generate)
-                    if [[ -f "${key_file}" ]]; then
-                        printf "\n  Key already exists at ${key_file}\n"
-                        read -rp "  Overwrite? (y/N): " confirm
-                        [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return 0
-                    fi
-                    ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)-${DOMAIN}" -f "$key_file" -N "" 2>/dev/null
-                    log_success "Deploy key generated."
-                    printf "\n  ${BOLD}Copy this public key and add it to GitHub:${NC}\n\n"
-                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
-                    printf "  ${BOLD}GitHub URL:${NC}\n"
-                    printf "  https://github.com/azsmarthub/az-wp/settings/keys\n\n"
-                    printf "  Steps:\n"
-                    printf "  1. Click ${BOLD}Add deploy key${NC}\n"
-                    printf "  2. Title: ${GREEN}VPS - %s${NC}\n" "$DOMAIN"
-                    printf "  3. Paste the key above\n"
-                    printf "  4. Do NOT check 'Allow write access'\n"
-                    printf "  5. Click ${BOLD}Add key${NC}\n\n"
-                    printf "  After adding, run: ${BOLD}azwp advanced deploy-key setup${NC}\n"
-                    ;;
-                show)
-                    if [[ ! -f "${key_file}.pub" ]]; then
-                        log_warn "No deploy key found. Run: azwp advanced deploy-key generate"
-                        return 1
-                    fi
-                    printf "\n  ${BOLD}Public key:${NC}\n\n"
-                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
-                    printf "  ${BOLD}Add to:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n"
-                    ;;
                 setup)
-                    if [[ ! -f "${key_file}" ]]; then
-                        log_warn "No deploy key found. Generating..."
+                    # All-in-one: generate + SSH config + switch remote
+                    if ! $has_key; then
                         ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)-${DOMAIN}" -f "$key_file" -N "" 2>/dev/null
-                        log_success "Key generated."
-                        printf "\n  ${BOLD}Public key (add to GitHub):${NC}\n\n"
-                        printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
-                        printf "  ${BOLD}URL:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n\n"
+                        chmod 600 "$key_file"
+                        log_success "Deploy key generated."
                     fi
 
-                    # Configure SSH
                     if ! grep -q "azwp_deploy" /root/.ssh/config 2>/dev/null; then
-                        log_sub "Configuring SSH for GitHub..."
+                        mkdir -p /root/.ssh
                         cat >> /root/.ssh/config << 'SSHEOF'
 
 # az-wp deploy key for GitHub
@@ -2420,46 +2417,75 @@ Host github.com
 SSHEOF
                         chmod 600 /root/.ssh/config
                         log_success "SSH config updated."
-                    else
-                        log_sub "SSH config already has azwp_deploy entry."
                     fi
 
-                    # Switch remote to SSH
-                    local az_dir; az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
-                    local current_url; current_url="$(cd "$az_dir" && git remote get-url origin 2>/dev/null || echo "")"
-                    if [[ "$current_url" != git@* ]]; then
-                        local ssh_url="git@github.com:azsmarthub/az-wp.git"
-                        log_sub "Switching remote: ${current_url} → ${ssh_url}"
-                        cd "$az_dir" && git remote set-url origin "$ssh_url"
+                    if [[ "$remote_url" != git@* ]]; then
+                        cd "$az_dir" && git remote set-url origin "git@github.com:azsmarthub/az-wp.git"
                         log_success "Remote switched to SSH."
-                    else
-                        log_sub "Remote already uses SSH: ${current_url}"
                     fi
 
-                    printf "\n  ${BOLD}Next steps:${NC}\n"
-                    printf "  1. Add public key to GitHub (if not done yet)\n"
-                    printf "  2. Run: ${BOLD}azwp advanced deploy-key test${NC}\n"
-                    printf "  3. Then: ${BOLD}azwp update pull-update${NC}\n"
+                    printf "\n  ${BOLD}Public key (add to GitHub):${NC}\n\n"
+                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+                    printf "  ${BOLD}Add at:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n"
+                    printf "  Title: ${GREEN}VPS - %s${NC} | Do NOT check 'Allow write access'\n\n" "$DOMAIN"
+                    printf "  After adding → ${BOLD}azwp advanced deploy-key test${NC}\n"
+                    ;;
+                regenerate)
+                    printf "\n  This will replace the current key. You'll need to update GitHub.\n"
+                    read -rp "  Continue? (y/N): " confirm
+                    [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return 0
+                    rm -f "$key_file" "${key_file}.pub"
+                    ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)-${DOMAIN}" -f "$key_file" -N "" 2>/dev/null
+                    chmod 600 "$key_file"
+                    log_success "New key generated."
+                    printf "\n  ${BOLD}Replace the old key on GitHub with this new one:${NC}\n\n"
+                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+                    printf "  ${BOLD}URL:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n"
+                    ;;
+                show)
+                    if ! $has_key; then
+                        log_warn "No key found. Run: azwp advanced deploy-key setup"
+                        return 1
+                    fi
+                    printf "\n  ${BOLD}Public key:${NC}\n\n"
+                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+                    printf "  ${BOLD}Add at:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n"
                     ;;
                 test)
-                    if [[ ! -f "${key_file}" ]]; then
-                        log_error "No deploy key found. Run: azwp advanced deploy-key generate"
+                    if ! $has_key; then
+                        log_error "No key found. Run: azwp advanced deploy-key setup"
                         return 1
                     fi
                     printf "\n  Testing GitHub SSH connection...\n\n"
                     local test_output
                     test_output="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_file" -T git@github.com 2>&1 || true)"
-                    echo "  $test_output"
-                    printf "\n"
+                    printf "  %s\n\n" "$test_output"
                     if echo "$test_output" | grep -qi "success\|granted"; then
-                        log_success "GitHub connection verified! You can now use: azwp update pull"
+                        log_success "Connected! Ready to use: azwp update pull-update"
                     else
                         log_error "Connection failed."
-                        printf "\n  Checklist:\n"
-                        printf "  - Did you add the public key to GitHub? Run: azwp advanced deploy-key show\n"
-                        printf "  - GitHub URL: https://github.com/azsmarthub/az-wp/settings/keys\n"
-                        printf "  - Is the repo set to the correct org/name?\n"
+                        printf "  → Add key to GitHub: https://github.com/azsmarthub/az-wp/settings/keys\n"
+                        printf "  → Show key: ${BOLD}azwp advanced deploy-key show${NC}\n"
                     fi
+                    ;;
+                to-https)
+                    cd "$az_dir" && git remote set-url origin "https://github.com/azsmarthub/az-wp.git"
+                    log_success "Switched back to HTTPS."
+                    printf "  ${DIM}Note: HTTPS only works with public repos.${NC}\n"
+                    ;;
+                remove)
+                    printf "\n  This removes the deploy key and SSH config.\n"
+                    read -rp "  Continue? (y/N): " confirm
+                    [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return 0
+                    rm -f "$key_file" "${key_file}.pub"
+                    # Remove SSH config block
+                    if [[ -f /root/.ssh/config ]]; then
+                        sed -i '/# az-wp deploy key/,/StrictHostKeyChecking/d' /root/.ssh/config 2>/dev/null || true
+                        sed -i '/^$/N;/^\n$/d' /root/.ssh/config 2>/dev/null || true
+                    fi
+                    # Switch back to HTTPS
+                    cd "$az_dir" && git remote set-url origin "https://github.com/azsmarthub/az-wp.git" 2>/dev/null || true
+                    log_success "Deploy key removed. Remote switched to HTTPS."
                     ;;
             esac
             ;;
