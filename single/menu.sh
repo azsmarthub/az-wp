@@ -216,6 +216,7 @@ Usage: azwp [command] [subcommand]
   azwp advanced services   Restart/reload services
   azwp advanced workers    FPM pool status, kill stuck
   azwp advanced pma-config phpMyAdmin: enable, disable, regenerate
+  azwp advanced deploy-key GitHub deploy key: generate, setup, test
   azwp retune              Shortcut: re-tune after VPS resize
 
 ── AffiliateCMS Update ────────────────────────────
@@ -1610,7 +1611,7 @@ menu_domain() {
 # 8) ADVANCED
 # ===========================================================================
 menu_advanced() {
-    local sub="${1:-}"
+    local sub="${1:-}" sub2="${2:-}"
     if [[ -z "$sub" ]]; then
         # Interactive loop — stay in Advanced until Back
         while true; do
@@ -1623,30 +1624,30 @@ menu_advanced() {
             printf "  6) Services (restart, reload)\n"
             printf "  7) Workers (FPM pools)\n"
             printf "  8) phpMyAdmin config\n"
+            printf "  9) GitHub Deploy Key (for private repo updates)\n"
             printf "  0) Back\n\n"
             read -rp "  Choose: " sub
             case "$sub" in
                 1) sub="ssl" ;; 2) sub="security" ;; 3) sub="perf" ;;
                 4) sub="php" ;; 5) sub="cloudflare" ;; 6) sub="services" ;;
-                7) sub="workers" ;; 8) sub="pma-config" ;;
+                7) sub="workers" ;; 8) sub="pma-config" ;; 9) sub="deploy-key" ;;
                 0|"") return 0 ;; *) continue ;;
             esac
-            # Run the selected sub-action then loop back to Advanced menu
-            _advanced_action "$sub"
-            sub=""
+            _advanced_action "$sub" "$sub2"
+            sub="" ; sub2=""
         done
         return 0
     fi
-    _advanced_action "$sub"
+    _advanced_action "$sub" "$sub2"
 }
 
 _advanced_action() {
-    local sub="$1"
+    local sub="$1" extra="${2:-}"
 
     case "$sub" in
         # --- SSL ---
         ssl)
-            local ssl_sub="${2:-}"
+            local ssl_sub="${extra}"
             if [[ -z "$ssl_sub" ]]; then
                 _header "SSL Management"
                 printf "  1) Issue/renew certificate\n"
@@ -1669,7 +1670,7 @@ _advanced_action() {
 
         # --- Security ---
         security)
-            local sec_sub="${2:-}"
+            local sec_sub="${extra}"
             if [[ -z "$sec_sub" ]]; then
                 _header "Security"
                 # Show Telegram alert status
@@ -1847,7 +1848,7 @@ This is a test message from azwp security scanner."
 
         # --- Performance ---
         perf)
-            local perf_sub="${2:-}"
+            local perf_sub="${extra}"
             if [[ -z "$perf_sub" ]]; then
                 _header "Performance"
                 printf "  1) Re-tune (after VPS resize)\n"
@@ -1919,7 +1920,7 @@ This is a test message from azwp security scanner."
 
         # --- PHP Info ---
         php)
-            local php_sub="${2:-}"
+            local php_sub="${extra}"
             if [[ -z "$php_sub" ]]; then
                 _header "PHP ${PHP_VERSION} Info"
 
@@ -2124,7 +2125,7 @@ This is a test message from azwp security scanner."
 
         # --- Services ---
         services)
-            local svc_sub="${2:-}"
+            local svc_sub="${extra}"
             if [[ -z "$svc_sub" ]]; then
                 _header "Services Control"
                 printf "  1) Restart all\n"
@@ -2147,7 +2148,7 @@ This is a test message from azwp security scanner."
 
         # --- Workers ---
         workers)
-            local w_sub="${2:-}"
+            local w_sub="${extra}"
             if [[ -z "$w_sub" ]]; then
                 _header "Workers Management"
                 local web_active web_max wrk_active wrk_max
@@ -2177,7 +2178,7 @@ This is a test message from azwp security scanner."
 
         # --- phpMyAdmin config ---
         pma-config)
-            local pma_sub="${2:-}"
+            local pma_sub="${extra}"
             if [[ -z "$pma_sub" ]]; then
                 _header "phpMyAdmin Config"
                 local pma_path; pma_path="$(state_get PMA_PATH 2>/dev/null)" || pma_path=""
@@ -2205,6 +2206,147 @@ This is a test message from azwp security scanner."
                     local nginx_conf="/etc/nginx/sites-available/${DOMAIN}.conf"
                     sed -i '/azwp-pma.conf/d' "$nginx_conf" 2>/dev/null || true
                     _pma_enable
+                    ;;
+            esac
+            ;;
+
+        # --- GitHub Deploy Key ---
+        deploy-key)
+            local dk_sub="${extra}"
+            local key_file="/root/.ssh/azwp_deploy"
+
+            if [[ -z "$dk_sub" ]]; then
+                _header "GitHub Deploy Key"
+
+                if [[ -f "${key_file}.pub" ]]; then
+                    printf "  Status: ${GREEN}Key exists${NC}\n"
+                    printf "  File:   ${key_file}\n\n"
+                    printf "  ${BOLD}Public key:${NC}\n"
+                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+
+                    # Check if git remote is SSH
+                    local az_dir; az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
+                    local remote_url; remote_url="$(cd "$az_dir" && git remote get-url origin 2>/dev/null || echo "")"
+                    if [[ "$remote_url" == git@* ]]; then
+                        printf "  Remote:  ${GREEN}SSH${NC} (%s)\n" "$remote_url"
+                        # Test connection
+                        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_file" -T git@github.com 2>&1 | grep -qi "success\|granted"; then
+                            printf "  Access:  ${GREEN}Verified${NC}\n"
+                        else
+                            printf "  Access:  ${YELLOW}Not verified${NC} (key may not be added to GitHub yet)\n"
+                        fi
+                    else
+                        printf "  Remote:  ${YELLOW}HTTPS${NC} (%s)\n" "$remote_url"
+                        printf "  ${DIM}Switch to SSH with option 3 below.${NC}\n"
+                    fi
+                else
+                    printf "  Status: ${RED}No deploy key found${NC}\n"
+                fi
+
+                printf "\n  1) Generate new deploy key\n"
+                printf "  2) Show public key (copy to GitHub)\n"
+                printf "  3) Switch repo to SSH + configure\n"
+                printf "  4) Test GitHub connection\n"
+                printf "  0) Back\n\n"
+                read -rp "  Choose: " dk_sub
+                case "$dk_sub" in 1) dk_sub="generate" ;; 2) dk_sub="show" ;; 3) dk_sub="setup" ;; 4) dk_sub="test" ;; *) return 0 ;; esac
+            fi
+
+            case "$dk_sub" in
+                generate)
+                    if [[ -f "${key_file}" ]]; then
+                        printf "\n  Key already exists at ${key_file}\n"
+                        read -rp "  Overwrite? (y/N): " confirm
+                        [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return 0
+                    fi
+                    ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)-${DOMAIN}" -f "$key_file" -N "" 2>/dev/null
+                    log_success "Deploy key generated."
+                    printf "\n  ${BOLD}Copy this public key and add it to GitHub:${NC}\n\n"
+                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+                    printf "  ${BOLD}GitHub URL:${NC}\n"
+                    printf "  https://github.com/azsmarthub/az-wp/settings/keys\n\n"
+                    printf "  Steps:\n"
+                    printf "  1. Click ${BOLD}Add deploy key${NC}\n"
+                    printf "  2. Title: ${GREEN}VPS - %s${NC}\n" "$DOMAIN"
+                    printf "  3. Paste the key above\n"
+                    printf "  4. Do NOT check 'Allow write access'\n"
+                    printf "  5. Click ${BOLD}Add key${NC}\n\n"
+                    printf "  After adding, run: ${BOLD}azwp advanced deploy-key setup${NC}\n"
+                    ;;
+                show)
+                    if [[ ! -f "${key_file}.pub" ]]; then
+                        log_warn "No deploy key found. Run: azwp advanced deploy-key generate"
+                        return 1
+                    fi
+                    printf "\n  ${BOLD}Public key:${NC}\n\n"
+                    printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+                    printf "  ${BOLD}Add to:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n"
+                    ;;
+                setup)
+                    if [[ ! -f "${key_file}" ]]; then
+                        log_warn "No deploy key found. Generating..."
+                        ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)-${DOMAIN}" -f "$key_file" -N "" 2>/dev/null
+                        log_success "Key generated."
+                        printf "\n  ${BOLD}Public key (add to GitHub):${NC}\n\n"
+                        printf "  ${CYAN}%s${NC}\n\n" "$(cat "${key_file}.pub")"
+                        printf "  ${BOLD}URL:${NC} https://github.com/azsmarthub/az-wp/settings/keys\n\n"
+                    fi
+
+                    # Configure SSH
+                    if ! grep -q "azwp_deploy" /root/.ssh/config 2>/dev/null; then
+                        log_sub "Configuring SSH for GitHub..."
+                        cat >> /root/.ssh/config << 'SSHEOF'
+
+# az-wp deploy key for GitHub
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile /root/.ssh/azwp_deploy
+    IdentitiesOnly yes
+    StrictHostKeyChecking no
+SSHEOF
+                        chmod 600 /root/.ssh/config
+                        log_success "SSH config updated."
+                    else
+                        log_sub "SSH config already has azwp_deploy entry."
+                    fi
+
+                    # Switch remote to SSH
+                    local az_dir; az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
+                    local current_url; current_url="$(cd "$az_dir" && git remote get-url origin 2>/dev/null || echo "")"
+                    if [[ "$current_url" != git@* ]]; then
+                        local ssh_url="git@github.com:azsmarthub/az-wp.git"
+                        log_sub "Switching remote: ${current_url} → ${ssh_url}"
+                        cd "$az_dir" && git remote set-url origin "$ssh_url"
+                        log_success "Remote switched to SSH."
+                    else
+                        log_sub "Remote already uses SSH: ${current_url}"
+                    fi
+
+                    printf "\n  ${BOLD}Next steps:${NC}\n"
+                    printf "  1. Add public key to GitHub (if not done yet)\n"
+                    printf "  2. Run: ${BOLD}azwp advanced deploy-key test${NC}\n"
+                    printf "  3. Then: ${BOLD}azwp update pull-update${NC}\n"
+                    ;;
+                test)
+                    if [[ ! -f "${key_file}" ]]; then
+                        log_error "No deploy key found. Run: azwp advanced deploy-key generate"
+                        return 1
+                    fi
+                    printf "\n  Testing GitHub SSH connection...\n\n"
+                    local test_output
+                    test_output="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_file" -T git@github.com 2>&1 || true)"
+                    echo "  $test_output"
+                    printf "\n"
+                    if echo "$test_output" | grep -qi "success\|granted"; then
+                        log_success "GitHub connection verified! You can now use: azwp update pull"
+                    else
+                        log_error "Connection failed."
+                        printf "\n  Checklist:\n"
+                        printf "  - Did you add the public key to GitHub? Run: azwp advanced deploy-key show\n"
+                        printf "  - GitHub URL: https://github.com/azsmarthub/az-wp/settings/keys\n"
+                        printf "  - Is the repo set to the correct org/name?\n"
+                    fi
                     ;;
             esac
             ;;
