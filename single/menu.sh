@@ -173,7 +173,9 @@ Usage: azwp [command] [subcommand]
   azwp backup full         Full backup (files + DB)
 
 ── WordPress ──────────────────────────────────────
-  azwp wp update           Update core + plugins + themes
+  azwp wp update           Update menu (AffiliateCMS + WP core)
+  azwp wp update pull-update  Pull + update all AffiliateCMS components
+  azwp wp update wp-core   Update WP core + WP plugins + WP themes
   azwp wp plugins          List installed plugins
   azwp wp debug on|off     Toggle debug mode
   azwp wp maintenance      Toggle maintenance mode
@@ -217,6 +219,7 @@ Usage: azwp [command] [subcommand]
   azwp advanced workers    FPM pool status, kill stuck
   azwp advanced pma-config phpMyAdmin: enable, disable, regenerate
   azwp advanced deploy-key GitHub deploy key: generate, setup, test
+  azwp advanced update-scripts  Pull latest azwp scripts from GitHub
   azwp retune              Shortcut: re-tune after VPS resize
 
 ── AffiliateCMS Update ────────────────────────────
@@ -283,7 +286,7 @@ menu_wordpress() {
     if [[ -z "$sub" ]]; then
         _header "WordPress Tools"
         printf "  1) Login (auto-login URL, no password)\n"
-        printf "  2) Update all (core + plugins + themes)\n"
+        printf "  2) Update (AffiliateCMS + WP core)\n"
         printf "  3) List plugins\n"
         printf "  4) Debug mode on/off\n"
         printf "  5) Maintenance mode on/off\n"
@@ -304,11 +307,43 @@ menu_wordpress() {
             _wp_auto_login
             ;;
         update)
-            log_info "Updating WordPress core, plugins, and themes..."
-            wp_run core update
-            wp_run plugin update --all
-            wp_run theme update --all
-            log_success "WordPress updated."
+            local up_sub="${2:-}"
+            if [[ -z "$up_sub" ]]; then
+                _header "Update"
+                printf "  ${BOLD}AffiliateCMS:${NC}\n"
+                printf "    1) Pull + Update All    (pull latest from GitHub + install all)\n"
+                printf "    2) Pro plugin           affiliatecms-pro\n"
+                printf "    3) Categories plugin    affiliatecms-cat\n"
+                printf "    4) AI plugin            affiliatecms-ai\n"
+                printf "    5) Theme (parent)       affiliateCMS-theme\n"
+                printf "    6) Child Theme          affiliateCMS-Child-theme\n"
+                printf "\n  ${BOLD}WordPress:${NC}\n"
+                printf "    7) WP Core + WP plugins + WP themes (from wordpress.org)\n"
+                printf "\n  ${BOLD}Utilities:${NC}\n"
+                printf "    8) Seed AI prompts\n"
+                printf "    9) Pull only (download packages, don't install)\n"
+                printf "\n    0) Back\n\n"
+                read -rp "  Choose: " up_sub
+                case "$up_sub" in
+                    1) up_sub="pull-update" ;; 2) up_sub="pro" ;; 3) up_sub="cat" ;;
+                    4) up_sub="ai" ;; 5) up_sub="theme" ;; 6) up_sub="child-theme" ;;
+                    7) up_sub="wp-core" ;; 8) up_sub="seed" ;; 9) up_sub="pull" ;;
+                    *) return 0 ;;
+                esac
+            fi
+            case "$up_sub" in
+                wp-core)
+                    log_info "Updating WordPress core, plugins, and themes..."
+                    wp_run core update
+                    wp_run plugin update --all
+                    wp_run theme update --all
+                    log_success "WordPress updated."
+                    ;;
+                *)
+                    # Delegate to azwp update command
+                    menu_update "$up_sub"
+                    ;;
+            esac
             ;;
         plugins)
             wp_run plugin list
@@ -1625,12 +1660,14 @@ menu_advanced() {
             printf "  7) Workers (FPM pools)\n"
             printf "  8) phpMyAdmin config\n"
             printf "  9) GitHub Deploy Key (for private repo updates)\n"
+            printf "  10) Update azwp Scripts (pull latest menu/install scripts)\n"
             printf "  0) Back\n\n"
             read -rp "  Choose: " sub
             case "$sub" in
                 1) sub="ssl" ;; 2) sub="security" ;; 3) sub="perf" ;;
                 4) sub="php" ;; 5) sub="cloudflare" ;; 6) sub="services" ;;
                 7) sub="workers" ;; 8) sub="pma-config" ;; 9) sub="deploy-key" ;;
+                10) sub="update-scripts" ;;
                 0|"") return 0 ;; *) continue ;;
             esac
             _advanced_action "$sub" "$sub2"
@@ -2210,6 +2247,82 @@ This is a test message from azwp security scanner."
             esac
             ;;
 
+        # --- Update Scripts ---
+        update-scripts)
+            local az_dir
+            az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
+
+            if [[ ! -d "${az_dir}/.git" ]]; then
+                log_error "az-wp repo not found at ${az_dir}."
+                return 1
+            fi
+
+            _header "Update azwp Scripts"
+
+            # Show current version
+            local current_ver
+            current_ver="$(cat "${az_dir}/VERSION" 2>/dev/null || echo 'unknown')"
+            printf "  Current version: ${BOLD}%s${NC}\n" "$current_ver"
+            printf "  Install dir:     %s\n\n" "$az_dir"
+
+            log_info "Pulling latest from repository..."
+            cd "$az_dir"
+            local before_hash; before_hash="$(git rev-parse HEAD 2>/dev/null)"
+            local fetch_output
+            fetch_output="$(GIT_TERMINAL_PROMPT=0 git fetch origin 2>&1)" || {
+                log_error "Git fetch failed."
+                local remote_url; remote_url="$(git remote get-url origin 2>/dev/null || echo '')"
+                if [[ "$remote_url" == https://* ]]; then
+                    printf "\n  Remote uses HTTPS but repo may be private.\n"
+                    printf "  Fix: ${BOLD}azwp advanced deploy-key setup${NC} (switch to SSH)\n"
+                else
+                    printf "\n  Remote uses SSH: %s\n" "$remote_url"
+                    printf "  Fix: ${BOLD}azwp advanced deploy-key test${NC} (check key access)\n"
+                fi
+                return 1
+            }
+
+            local behind
+            behind="$(git rev-list HEAD..origin/main --count 2>/dev/null || echo 0)"
+            if [[ "$behind" -eq 0 ]]; then
+                log_success "Scripts are already up to date."
+                return 0
+            fi
+
+            log_sub "${behind} update(s) available."
+
+            # Show changed script files
+            local changed_scripts
+            changed_scripts="$(git diff --name-only HEAD..origin/main -- single/ lib/ setup.sh 2>/dev/null || true)"
+            if [[ -n "$changed_scripts" ]]; then
+                printf "\n  ${BOLD}Changed scripts:${NC}\n"
+                echo "$changed_scripts" | while read -r f; do printf "    ${GREEN}%s${NC}\n" "$f"; done
+                printf "\n"
+            fi
+
+            # Show changed packages
+            local changed_pkgs
+            changed_pkgs="$(git diff --name-only HEAD..origin/main -- clone/*.zip 2>/dev/null || true)"
+            if [[ -n "$changed_pkgs" ]]; then
+                printf "  ${BOLD}Updated packages:${NC}\n"
+                echo "$changed_pkgs" | while read -r f; do printf "    ${CYAN}%s${NC}\n" "$(basename "$f")"; done
+                printf "\n"
+            fi
+
+            git pull --ff-only origin main 2>&1 | head -5
+
+            local after_hash; after_hash="$(git rev-parse HEAD 2>/dev/null)"
+            if [[ "$before_hash" != "$after_hash" ]]; then
+                local new_ver; new_ver="$(cat "${az_dir}/VERSION" 2>/dev/null || echo 'unknown')"
+                log_success "Scripts updated! v${current_ver} → v${new_ver}"
+                if [[ -n "$changed_pkgs" ]]; then
+                    printf "\n  ${BOLD}Tip:${NC} New packages available. Run ${BOLD}azwp update all${NC} to install them.\n"
+                fi
+            else
+                log_warn "Pull completed but no changes applied."
+            fi
+            ;;
+
         # --- GitHub Deploy Key ---
         deploy-key)
             local dk_sub="${extra}"
@@ -2521,7 +2634,11 @@ _update_pull() {
 
     log_info "Pulling latest from az-wp repository..."
     cd "$az_dir"
-    git fetch origin 2>&1 | head -5
+    local fetch_out
+    fetch_out="$(GIT_TERMINAL_PROMPT=0 git fetch origin 2>&1)" || {
+        log_error "Git fetch failed. Run: azwp advanced deploy-key setup"
+        return 1
+    }
 
     # Show what's new
     local behind
