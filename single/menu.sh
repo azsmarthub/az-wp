@@ -218,6 +218,17 @@ Usage: azwp [command] [subcommand]
   azwp advanced pma-config phpMyAdmin: enable, disable, regenerate
   azwp retune              Shortcut: re-tune after VPS resize
 
+── AffiliateCMS Update ────────────────────────────
+  azwp update pull         Pull latest packages from GitHub
+  azwp update all          Update all plugins + themes
+  azwp update pro          Update AffiliateCMS Pro
+  azwp update cat          Update AffiliateCMS Categories
+  azwp update ai           Update AffiliateCMS AI
+  azwp update theme        Update parent theme
+  azwp update child-theme  Update child theme
+  azwp update pull-update  Pull + update all (one command)
+  azwp update seed         Seed AI prompt defaults
+
 ── Other ──────────────────────────────────────────
   azwp help                This help page
   azwp                     Interactive menu
@@ -1093,6 +1104,7 @@ _cron_install_preset() {
         "scrape|*/2 * * * *||/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
         "process-scheduled|*/2 * * * *|sleep 20 && |/wp-json/acms/v1/automation/process-scheduled|30|GET|Process scheduled (+20s)"
         "scrape-monitor|*/2 * * * *|sleep 40 && |/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor (+40s)"
+        "pro-queue|*/2 * * * *|sleep 50 && |/wp-json/acms/v1/cron/queue|60|GET|Pro keyword queue (+50s)"
         "queue-processor|*/2 * * * *|sleep 60 && |/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Queue processor (+60s)"
         "queue-monitor|*/2 * * * *|sleep 80 && |/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Queue monitor (+80s)"
         "product-ai|*/5 * * * *||/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
@@ -2306,6 +2318,164 @@ CRONCFG
 }
 
 # ===========================================================================
+# UPDATE - AffiliateCMS plugin/theme updater from az-wp repo
+# ===========================================================================
+
+# Component map: shortname → zip filename | WP install type | WP slug
+_ACMS_COMPONENTS=(
+    "pro|affiliatecms-pro.zip|plugin|affiliatecms-pro"
+    "cat|affiliatecms-cat.zip|plugin|affiliatecms-cat"
+    "ai|affiliatecms-ai.zip|plugin|affiliatecms-ai"
+    "theme|affiliateCMS-theme.zip|theme|affiliateCMS-theme"
+    "child-theme|affiliateCMS-Child-theme.zip|theme|affiliateCMS-Child-theme"
+)
+
+_update_component() {
+    local short="$1"
+    local zip_file="" install_type="" slug=""
+
+    for comp in "${_ACMS_COMPONENTS[@]}"; do
+        IFS='|' read -r s z t sl <<< "$comp"
+        if [[ "$s" == "$short" ]]; then
+            zip_file="$z"; install_type="$t"; slug="$sl"
+            break
+        fi
+    done
+
+    if [[ -z "$zip_file" ]]; then
+        log_error "Unknown component: $short"
+        return 1
+    fi
+
+    local az_dir
+    az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
+    local zip_path="${az_dir}/clone/${zip_file}"
+
+    if [[ ! -f "$zip_path" ]]; then
+        log_error "Zip not found: ${zip_path}"
+        log_sub "Run 'azwp update pull' first to fetch latest packages."
+        return 1
+    fi
+
+    log_info "Updating ${slug} from ${zip_file}..."
+
+    if [[ "$install_type" == "plugin" ]]; then
+        sudo -u "$SITE_USER" wp plugin install "$zip_path" --force --activate --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+    else
+        sudo -u "$SITE_USER" wp theme install "$zip_path" --force --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+    fi
+
+    log_success "${slug} updated."
+}
+
+_update_pull() {
+    local az_dir
+    az_dir="$(state_get AZ_DIR 2>/dev/null || echo /opt/azwp)"
+
+    if [[ ! -d "${az_dir}/.git" ]]; then
+        log_error "az-wp repo not found at ${az_dir}. Cannot pull updates."
+        return 1
+    fi
+
+    log_info "Pulling latest from az-wp repository..."
+    cd "$az_dir"
+    git fetch origin 2>&1 | head -5
+
+    # Show what's new
+    local behind
+    behind="$(git rev-list HEAD..origin/main --count 2>/dev/null || echo 0)"
+    if [[ "$behind" -eq 0 ]]; then
+        log_success "Already up to date."
+        return 0
+    fi
+
+    log_sub "${behind} new commit(s) available."
+
+    # Pull changes (fast-forward only, safe)
+    git pull --ff-only origin main 2>&1 | head -5
+
+    if [[ $? -eq 0 ]]; then
+        log_success "Updated. ${behind} commit(s) applied."
+        # Show which zips changed
+        local changed
+        changed="$(git diff --name-only HEAD~${behind} HEAD -- clone/*.zip 2>/dev/null || true)"
+        if [[ -n "$changed" ]]; then
+            log_sub "Updated packages:"
+            echo "$changed" | while read -r f; do printf "    ${GREEN}%s${NC}\n" "$(basename "$f")"; done
+        fi
+    else
+        log_warn "Fast-forward failed. You may have local changes."
+        log_sub "Try: cd ${az_dir} && git reset --hard origin/main"
+    fi
+}
+
+_update_seed_prompts() {
+    log_info "Seeding AI prompt defaults..."
+    sudo -u "$SITE_USER" wp eval 'if (class_exists("AffiliateCMS\AI\Core\DefaultPrompts")) { AffiliateCMS\AI\Core\DefaultPrompts::seed(); echo "OK"; }' --path="$WEB_ROOT" 2>/dev/null | grep -q OK \
+        && log_success "AI prompts seeded." \
+        || log_warn "Could not seed prompts (plugin may not be active)."
+}
+
+menu_update() {
+    local sub="${1:-}"
+
+    if [[ -z "$sub" ]]; then
+        _header "AffiliateCMS Update"
+        printf "  ${BOLD}Components:${NC}\n"
+        printf "    1) pro          AffiliateCMS Pro plugin\n"
+        printf "    2) cat          AffiliateCMS Categories plugin\n"
+        printf "    3) ai           AffiliateCMS AI plugin\n"
+        printf "    4) theme        AffiliateCMS Theme (parent)\n"
+        printf "    5) child-theme  AffiliateCMS Child Theme\n"
+        printf "    6) all          Update everything\n"
+        printf "\n  ${BOLD}Other:${NC}\n"
+        printf "    7) pull         Pull latest packages from GitHub\n"
+        printf "    8) pull-update  Pull + update all components\n"
+        printf "    9) seed         Seed AI prompt defaults\n"
+        printf "\n    0) Back\n\n"
+        read -rp "  Choose: " sub
+        case "$sub" in
+            1) sub="pro" ;; 2) sub="cat" ;; 3) sub="ai" ;;
+            4) sub="theme" ;; 5) sub="child-theme" ;; 6) sub="all" ;;
+            7) sub="pull" ;; 8) sub="pull-update" ;; 9) sub="seed" ;;
+            *) return 0 ;;
+        esac
+    fi
+
+    case "$sub" in
+        pro|cat|ai|theme|child-theme)
+            _update_component "$sub"
+            ;;
+        all)
+            for comp in "${_ACMS_COMPONENTS[@]}"; do
+                IFS='|' read -r short _ _ _ <<< "$comp"
+                _update_component "$short"
+            done
+            _update_seed_prompts
+            log_info "Purging caches..."
+            sudo -u "$SITE_USER" wp cache flush --path="$WEB_ROOT" 2>/dev/null || true
+            [[ -d "$CACHE_PATH" ]] && rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
+            log_success "All components updated."
+            ;;
+        pull)
+            _update_pull
+            ;;
+        pull-update)
+            _update_pull
+            printf "\n"
+            menu_update all
+            ;;
+        seed)
+            _update_seed_prompts
+            ;;
+        *)
+            log_warn "Unknown: $sub"
+            printf "  Usage: azwp update [pro|cat|ai|theme|child-theme|all|pull|pull-update|seed]\n"
+            ;;
+    esac
+}
+
+# ===========================================================================
 # 9) HELP
 # ===========================================================================
 menu_help() {
@@ -2331,6 +2501,7 @@ main() {
             domain)   menu_domain "${2:-}" ;;
             advanced) menu_advanced "${2:-}" "${3:-}" ;;
             help|-h|--help) menu_help ;;
+            update)   menu_update "${2:-}" ;;
             # Shortcuts
             login)    _wp_auto_login ;;
             pma)      menu_database pma ;;

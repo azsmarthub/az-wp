@@ -373,6 +373,15 @@ step_wordpress() {
 
         log_sub "Resetting admin password..."
         sudo -u "$SITE_USER" wp user update 1 --user_pass="$WP_ADMIN_PASS" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+
+        # Seed AI prompt defaults (ensures prompts exist even if DB dump is stale)
+        log_sub "Seeding AI prompt defaults..."
+        sudo -u "$SITE_USER" wp eval 'if (class_exists("AffiliateCMS\AI\Core\DefaultPrompts")) { AffiliateCMS\AI\Core\DefaultPrompts::seed(); echo "OK"; }' --path="$WEB_ROOT" 2>/dev/null | grep -q OK && log_sub "AI prompts seeded." || true
+
+        # Re-activate plugins to trigger activation hooks (schema migrations, cron registration)
+        log_sub "Re-activating plugins..."
+        sudo -u "$SITE_USER" wp plugin deactivate affiliatecms-pro affiliatecms-cat affiliatecms-ai --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        sudo -u "$SITE_USER" wp plugin activate affiliatecms-pro affiliatecms-cat affiliatecms-ai --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
     else
         # === FRESH MODE ===
         install_wordpress
@@ -441,6 +450,7 @@ CSCRON
                 "scrape|*/2 * * * *||/wp-json/acms/v1/automation/scrape|30|GET|Scrape dispatcher"
                 "process-scheduled|*/2 * * * *|sleep 20 && |/wp-json/acms/v1/automation/process-scheduled|30|GET|Process scheduled"
                 "scrape-monitor|*/2 * * * *|sleep 40 && |/wp-json/acms/v1/cron/scrape-monitor|30|GET|Scrape monitor"
+                "pro-queue|*/2 * * * *|sleep 50 && |/wp-json/acms/v1/cron/queue|60|GET|Pro keyword queue"
                 "queue-processor|*/2 * * * *|sleep 60 && |/wp-json/acms-cat/v1/cron/queue-processor|60|GET|Queue processor"
                 "queue-monitor|*/2 * * * *|sleep 80 && |/wp-json/acms-cat/v1/cron/queue-monitor|30|GET|Queue monitor"
                 "product-ai|*/5 * * * *||/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
