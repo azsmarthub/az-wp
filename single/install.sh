@@ -374,6 +374,18 @@ step_wordpress() {
         log_sub "Resetting admin password..."
         sudo -u "$SITE_USER" wp user update 1 --user_pass="$WP_ADMIN_PASS" --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
 
+        # Remove API keys/tokens from cloned data (production keys must not leak)
+        log_sub "Clearing cloned API keys..."
+        sudo -u "$SITE_USER" wp option update acms_ai_api_key '' --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        sudo -u "$SITE_USER" wp option update acms_crawlbase_token '' --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        sudo -u "$SITE_USER" wp option update acms_paapi_credentials '' --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+        # Clear keys embedded in general_settings JSON
+        sudo -u "$SITE_USER" wp eval '
+            $s = get_option("acms_general_settings", []);
+            foreach (["crawlbase_token","paapi_access_key","paapi_secret_key","api_key"] as $k) { $s[$k] = ""; }
+            update_option("acms_general_settings", $s);
+        ' --path="$WEB_ROOT" 2>/dev/null || true
+
         # Seed AI prompt defaults (ensures prompts exist even if DB dump is stale)
         log_sub "Seeding AI prompt defaults..."
         sudo -u "$SITE_USER" wp eval 'if (class_exists("AffiliateCMS\AI\Core\DefaultPrompts")) { AffiliateCMS\AI\Core\DefaultPrompts::seed(); echo "OK"; }' --path="$WEB_ROOT" 2>/dev/null | grep -q OK && log_sub "AI prompts seeded." || true
