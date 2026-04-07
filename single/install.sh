@@ -456,7 +456,7 @@ CSCRON
                 "product-ai|*/5 * * * *||/wp-json/acms/v1/cron/product-ai|30|GET|Product AI"
                 "post-ai|*/5 * * * *|sleep 30 && |/wp-json/acms/v1/cron/post-ai|30|GET|Post AI"
                 "category-ai|*/5 * * * *|sleep 60 && |/wp-json/acms-cat/v1/cron/category-ai|60|GET|Category AI"
-                "ai-jobs|*/2 * * * *|sleep 100 && |/wp-json/acms-ai/v1/cron/process-jobs|180|GET|AI job processor"
+                "ai-jobs|*/2 * * * *|sleep 10 && |/wp-json/acms-ai/v1/cron/process-jobs|300|GET|AI job processor"
                 "brand-ai|*/5 * * * *|sleep 90 && |/wp-json/acms/v1/cron/brand-ai|30|GET|Brand AI"
                 "brand-category-ai|*/5 * * * *|sleep 120 && |/wp-json/acms-cat/v1/cron/brand-category-ai|30|GET|Brand category AI"
                 "quick-update|*/30 * * * *||/wp-json/acms/v1/cron/quick-update|60|GET|Quick update"
