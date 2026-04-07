@@ -111,26 +111,43 @@ azwp update pull
 
 ---
 
-## All-in-One: Setup Private Repo Access
+## Quick Setup: New VPS (before installing azwp)
 
-Copy-paste this entire block on a new VPS:
+One command — copy-paste into any fresh VPS. Generates SSH key, configures GitHub access, shows the key to add:
 
 ```bash
-# Generate key + configure SSH + switch to SSH URL
-ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)" -f /root/.ssh/azwp_deploy -N "" && \
-cat >> /root/.ssh/config << 'SSHEOF'
+mkdir -p /root/.ssh && ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)" -f /root/.ssh/azwp_deploy -N "" -q && cat >> /root/.ssh/config << 'EOF'
 Host github.com
     HostName github.com
     User git
     IdentityFile /root/.ssh/azwp_deploy
     IdentitiesOnly yes
+    StrictHostKeyChecking no
+EOF
+chmod 600 /root/.ssh/config /root/.ssh/azwp_deploy && echo "" && echo "========================================" && echo "  DEPLOY KEY (copy this entire line):" && echo "========================================" && echo "" && cat /root/.ssh/azwp_deploy.pub && echo "" && echo "Add it here → https://github.com/azsmarthub/az-wp/settings/keys" && echo "Title: VPS - $(hostname)" && echo ""
+```
+
+After adding key to GitHub, install azwp:
+```bash
+git clone git@github.com:azsmarthub/az-wp.git /opt/azwp && bash /opt/azwp/single/install.sh
+```
+
+## All-in-One: Setup Private Repo Access (azwp already installed)
+
+Copy-paste on a VPS that already has azwp installed:
+
+```bash
+mkdir -p /root/.ssh && ssh-keygen -t ed25519 -C "azwp-deploy@$(hostname)" -f /root/.ssh/azwp_deploy -N "" -q && cat >> /root/.ssh/config << 'SSHEOF'
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile /root/.ssh/azwp_deploy
+    IdentitiesOnly yes
+    StrictHostKeyChecking no
 SSHEOF
-chmod 600 /root/.ssh/config && \
-cd /opt/azwp && \
-git remote set-url origin git@github.com:azsmarthub/az-wp.git && \
-echo "" && echo "=== Add this deploy key to GitHub ===" && echo "" && \
-cat /root/.ssh/azwp_deploy.pub && \
-echo "" && echo "URL: https://github.com/azsmarthub/az-wp/settings/keys"
+chmod 600 /root/.ssh/config /root/.ssh/azwp_deploy && \
+cd /opt/azwp && git remote set-url origin git@github.com:azsmarthub/az-wp.git && \
+echo "" && echo "========================================" && echo "  DEPLOY KEY (copy this entire line):" && echo "========================================" && echo "" && cat /root/.ssh/azwp_deploy.pub && echo "" && echo "Add it here → https://github.com/azsmarthub/az-wp/settings/keys" && echo ""
 ```
 
 After adding the key to GitHub:
