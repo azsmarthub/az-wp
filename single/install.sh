@@ -335,6 +335,19 @@ step_wordpress() {
             sed -i "s|https://cdn.productreviews.org/logo.png|/wp-content/uploads/2026/02/logo.png|g" "$theme_config"
         fi
 
+        # Customize child theme for new domain
+        local child_config="$WEB_ROOT/wp-content/themes/affiliateCMS-Child-theme/config.php"
+        if [[ -f "$child_config" ]]; then
+            sed -i "s|AmericanReviews\.org|${DOMAIN}|g" "$child_config"
+            sed -i "s|americanreviews\.org|${DOMAIN}|g" "$child_config"
+            sed -i "s|contact@${DOMAIN}|contact@${DOMAIN}|g" "$child_config"
+        fi
+        local child_style="$WEB_ROOT/wp-content/themes/affiliateCMS-Child-theme/style.css"
+        if [[ -f "$child_style" ]]; then
+            sed -i "s|americanreviews\.org|${DOMAIN}|g" "$child_style"
+            sed -i "s|AmericanReviews|${DOMAIN%%.*}|g" "$child_style"
+        fi
+
         # Fix hardcoded FPM pool name in CachePreload
         local cache_preload="$WEB_ROOT/wp-content/plugins/affiliatecms-pro/src/Core/CachePreload.php"
         if [[ -f "$cache_preload" ]]; then
@@ -394,6 +407,10 @@ step_wordpress() {
         log_sub "Re-activating plugins..."
         sudo -u "$SITE_USER" wp plugin deactivate affiliatecms-pro affiliatecms-cat affiliatecms-ai --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
         sudo -u "$SITE_USER" wp plugin activate affiliatecms-pro affiliatecms-cat affiliatecms-ai --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
+
+        # Activate child theme (customized with new domain above)
+        log_sub "Activating child theme..."
+        sudo -u "$SITE_USER" wp theme activate affiliateCMS-Child-theme --path="$WEB_ROOT" 2>&1 | grep -v Deprecated || true
     else
         # === FRESH MODE ===
         install_wordpress
