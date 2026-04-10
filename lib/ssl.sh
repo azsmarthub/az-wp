@@ -103,10 +103,74 @@ _has_cf_creds() {
 }
 
 # ---------------------------------------------------------------------------
+# Self-signed bootstrap for Cloudflare proxy
+#
+# Problem: when CF proxy is ON and "Always Use HTTPS" redirects all HTTP
+# (including /.well-known/acme-challenge), CF needs to reach origin :443.
+# On a fresh VPS there is no cert yet → 521 → HTTP-01 fails.
+#
+# Fix: install a 1-day self-signed cert and add listen 443 ssl to the vhost,
+# so CF (Full, not Strict) can reach origin over HTTPS and forward the ACME
+# challenge. Certbot then replaces the self-signed with the real LE cert.
+# ---------------------------------------------------------------------------
+_bootstrap_selfsigned_ssl() {
+    local ss_dir="/etc/ssl/azwp-bootstrap"
+    local ss_cert="$ss_dir/cert.pem"
+    local ss_key="$ss_dir/key.pem"
+    local conf="/etc/nginx/sites-available/${DOMAIN}.conf"
+
+    [[ ! -f "$conf" ]] && { log_error "nginx vhost not found: $conf"; return 1; }
+
+    # Skip bootstrap if vhost already has :443 ssl (real cert or prior bootstrap)
+    if grep -qE '^\s*listen\s+443\s+ssl' "$conf"; then
+        log_sub "Bootstrap: vhost already has :443 ssl — skipping"
+        return 0
+    fi
+
+    log_sub "Bootstrap: generating self-signed cert (CF Full mode requires origin :443)"
+    mkdir -p "$ss_dir"
+    chmod 700 "$ss_dir"
+    openssl req -x509 -newkey rsa:2048 -nodes \
+        -keyout "$ss_key" -out "$ss_cert" \
+        -days 1 -subj "/CN=${DOMAIN}" \
+        -addext "subjectAltName=DNS:${DOMAIN},DNS:www.${DOMAIN}" \
+        >/dev/null 2>&1
+    chmod 600 "$ss_key"
+
+    local ssl_block="    listen 443 ssl;
+    listen [::]:443 ssl;
+    ssl_certificate ${ss_cert};
+    ssl_certificate_key ${ss_key};"
+
+    # Insert ssl block after the `listen [::]:80;` line
+    awk -v block="$ssl_block" '
+        {print}
+        /listen \[::\]:80;/ && !inserted {print block; inserted=1}
+    ' "$conf" > "${conf}.tmp" && mv "${conf}.tmp" "$conf"
+
+    if ! nginx -t >/dev/null 2>&1; then
+        log_error "Bootstrap: nginx config test failed after injection"
+        nginx -t 2>&1 | head -10
+        return 1
+    fi
+    service_reload nginx
+    log_sub "Bootstrap: origin :443 now listening with self-signed cert"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Tier 1: HTTP-01 via --nginx
+# Auto-applies self-signed bootstrap when CF proxy is detected.
+# Honors AZWP_SSL_STAGING=1 env var to use LE staging (no rate limits).
 # ---------------------------------------------------------------------------
 _issue_http01() {
     local email="$1"
+
+    # Bootstrap :443 if behind CF proxy (required for HTTP-01 to pass through CF)
+    if detect_cloudflare_proxy; then
+        _bootstrap_selfsigned_ssl || log_warn "Bootstrap failed — HTTP-01 may fail"
+    fi
+
     local args=(
         --nginx
         --non-interactive
@@ -116,6 +180,7 @@ _issue_http01() {
         -d "$DOMAIN"
     )
     [[ "$WWW_RESOLVES" == "true" ]] && args+=(-d "www.${DOMAIN}")
+    [[ "${AZWP_SSL_STAGING:-}" == "1" ]] && { args+=(--staging); log_sub "Using LE STAGING (test cert)"; }
 
     log_sub "Method: HTTP-01 via nginx"
     certbot "${args[@]}" 2>&1
@@ -148,6 +213,7 @@ _issue_dns01_cf() {
         -d "$DOMAIN"
     )
     [[ "$WWW_RESOLVES" == "true" ]] && args+=(-d "www.${DOMAIN}")
+    [[ "${AZWP_SSL_STAGING:-}" == "1" ]] && { args+=(--staging); log_sub "Using LE STAGING (test cert)"; }
 
     log_sub "Method: DNS-01 via Cloudflare API"
     certbot "${args[@]}" 2>&1
