@@ -335,12 +335,12 @@ step_wordpress() {
             sed -i "s|https://cdn.productreviews.org/logo.png|/wp-content/uploads/2026/02/logo.png|g" "$theme_config"
         fi
 
-        # Customize child theme for new domain
-        local child_config="$WEB_ROOT/wp-content/themes/affiliateCMS-Child-theme/config.php"
-        if [[ -f "$child_config" ]]; then
-            sed -i "s|AmericanReviews\.org|${DOMAIN}|g" "$child_config"
-            sed -i "s|americanreviews\.org|${DOMAIN}|g" "$child_config"
-            sed -i "s|contact@${DOMAIN}|contact@${DOMAIN}|g" "$child_config"
+        # Customize child theme for new domain (config merged into functions.php)
+        local child_funcs="$WEB_ROOT/wp-content/themes/affiliateCMS-Child-theme/functions.php"
+        if [[ -f "$child_funcs" ]]; then
+            sed -i "s|AmericanReviews\.org|${DOMAIN}|g" "$child_funcs"
+            sed -i "s|americanreviews\.org|${DOMAIN}|g" "$child_funcs"
+            sed -i "s|American Reviews|${DOMAIN%%.*}|g" "$child_funcs"
         fi
         local child_style="$WEB_ROOT/wp-content/themes/affiliateCMS-Child-theme/style.css"
         if [[ -f "$child_style" ]]; then
