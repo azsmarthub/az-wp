@@ -1,25 +1,36 @@
 #!/usr/bin/env bash
-# ssl.sh — SSL certificate management (multi-tier)
+# ssl.sh — SSL certificate issuance
 #
-# Strategy (auto-detect):
-#   Tier 1  HTTP-01 via --nginx        (direct DNS, or CF without forced HTTPS)
-#   Tier 2  DNS-01 via dns-cloudflare  (CF proxy + CF credentials available)
+# Strategy: detect existing valid cert → bootstrap origin :443 → run certbot
+# via HTTP-01 through Cloudflare's "301 HTTP → HTTPS" path. This is the same
+# pattern FlashPanel and other panels use to renew certs behind CF proxy
+# without requiring user action at Cloudflare.
 #
-# User can force a method by setting state SSL_METHOD=http-01|dns-01|auto.
-# Cloudflare credentials are the same ones used by the cache feature
-# (CF_EMAIL + CF_API_KEY in /etc/azwp/config) — no duplicate setup.
+# Order of attempts:
+#   1. Direct HTTP-01 via certbot --nginx (works when CF proxy is off, or
+#      when CF does not force HTTPS on /.well-known/acme-challenge).
+#   2. Reuse-existing-cert bootstrap: find an existing valid cert for the
+#      domain (from FlashPanel, previous azwp, cPanel, raw LE paths, or a
+#      user-supplied file), use it as the origin :443 cert, then run
+#      certbot --webroot. LE follows CF's 301 to HTTPS, origin serves the
+#      valid cert, CF Full (Strict) accepts, the webroot location serves
+#      the challenge file, validation passes. Replaces bootstrap cert
+#      with the freshly-issued LE cert on success.
+#   3. Fail with actionable instructions for the user.
+#
+# Honors env var AZWP_SSL_STAGING=1 to use LE staging (no rate limits).
 
 [[ -n "${_AZ_SSL_LOADED:-}" ]] && return 0
 _AZ_SSL_LOADED=1
 
-CF_CREDS_FILE="/root/.secrets/cloudflare.ini"
+AZWP_SSL_BOOTSTRAP_DIR="/etc/ssl/azwp-bootstrap"
 
 # ---------------------------------------------------------------------------
-# Install certbot + plugins (nginx + dns-cloudflare)
+# Install certbot (nginx plugin for method 1; webroot doesn't need a plugin)
 # ---------------------------------------------------------------------------
 install_certbot() {
-    log_sub "Installing Certbot + plugins..."
-    apt_install certbot python3-certbot-nginx python3-certbot-dns-cloudflare
+    log_sub "Installing Certbot..."
+    apt_install certbot python3-certbot-nginx
     log_sub "Certbot installed."
 }
 
@@ -58,169 +69,205 @@ check_dns() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
-# Detect if domain is behind Cloudflare proxy (orange cloud)
-# Returns 0 if proxied, 1 if not.
-# ---------------------------------------------------------------------------
+# Detect Cloudflare proxy via response headers
 detect_cloudflare_proxy() {
     local headers
     headers="$(curl -sI --max-time 8 "http://${DOMAIN}/" 2>/dev/null)" || return 1
-    if grep -qiE '^(server:[[:space:]]*cloudflare|cf-ray:)' <<<"$headers"; then
-        return 0
-    fi
+    grep -qiE '^(server:[[:space:]]*cloudflare|cf-ray:)' <<<"$headers"
+}
+
+# ---------------------------------------------------------------------------
+# Cert match: return 0 if $1 cert file covers $DOMAIN (CN or SAN) and is
+# valid for at least 7 more days.
+# ---------------------------------------------------------------------------
+_cert_matches_domain() {
+    local cert="$1"
+    [[ -f "$cert" ]] || return 1
+    openssl x509 -in "$cert" -noout -checkend 604800 >/dev/null 2>&1 || return 1
+    local text
+    text="$(openssl x509 -in "$cert" -noout -text 2>/dev/null)" || return 1
+    grep -qE "(CN[[:space:]]*=[[:space:]]*${DOMAIN}([[:space:]]|$|,)|DNS:${DOMAIN}([[:space:]]|$|,))" <<<"$text"
+}
+
+# Given a cert file path, find the matching key file. Echoes key path on stdout.
+_find_key_for_cert() {
+    local cert="$1"
+    local dir base candidates=()
+    dir="$(dirname "$cert")"
+    base="$(basename "$cert")"
+
+    case "$base" in
+        server.crt)    candidates+=("$dir/server.key") ;;
+        fullchain.pem) candidates+=("$dir/privkey.pem") ;;
+        cert.pem)      candidates+=("$dir/privkey.pem" "$dir/key.pem") ;;
+        *.crt)         candidates+=("${cert%.crt}.key") ;;
+        *.pem)         candidates+=("${cert%.pem}.key" "${cert%.pem}-key.pem") ;;
+    esac
+    candidates+=("$dir/privkey.pem" "$dir/server.key" "$dir/key.pem")
+
+    local k
+    for k in "${candidates[@]}"; do
+        [[ -f "$k" ]] && { printf '%s' "$k"; return 0; }
+    done
     return 1
 }
 
 # ---------------------------------------------------------------------------
-# Write CF credentials file for certbot-dns-cloudflare
-# Uses Global API Key (already stored by cache feature).
+# Search common locations for a valid cert matching $DOMAIN.
+# On success prints "cert_path|key_path" and returns 0.
 # ---------------------------------------------------------------------------
-_write_cf_creds() {
-    local cf_email cf_key
-    cf_email="$(config_get CF_EMAIL 2>/dev/null)" || cf_email=""
-    cf_key="$(config_get CF_API_KEY 2>/dev/null)" || cf_key=""
+_find_existing_cert() {
+    local patterns=(
+        # Let's Encrypt native
+        "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+        "/etc/letsencrypt/live/${DOMAIN}-*/fullchain.pem"
+        # azwp's own bootstrap dir (previous install)
+        "${AZWP_SSL_BOOTSTRAP_DIR}/cert.pem"
+        # User-staged cert before reinstall
+        "/tmp/azwp-preinstall/cert.pem"
+        "/tmp/azwp-preinstall/fullchain.pem"
+        # FlashPanel
+        "/root/.flashpanel/certificates/*/server.crt"
+        # CloudPanel
+        "/etc/nginx/ssl-certificates/${DOMAIN}.crt"
+        # CyberPanel / OLS
+        "/etc/letsencrypt/live/${DOMAIN}/cert.pem"
+        # cPanel
+        "/var/cpanel/ssl/apache_tls/${DOMAIN}/combined"
+        # Generic panel/ssl dirs
+        "/etc/ssl/${DOMAIN}/fullchain.pem"
+        "/etc/ssl/${DOMAIN}/cert.pem"
+    )
 
-    if [[ -z "$cf_email" || -z "$cf_key" ]]; then
-        return 1
-    fi
-
-    mkdir -p "$(dirname "$CF_CREDS_FILE")"
-    chmod 700 "$(dirname "$CF_CREDS_FILE")"
-    cat > "$CF_CREDS_FILE" <<EOF
-# Managed by azwp — Cloudflare credentials for certbot DNS-01
-dns_cloudflare_email = ${cf_email}
-dns_cloudflare_api_key = ${cf_key}
-EOF
-    chmod 600 "$CF_CREDS_FILE"
-    return 0
+    local pat cert key
+    for pat in "${patterns[@]}"; do
+        # shellcheck disable=SC2086
+        for cert in $pat; do
+            [[ -f "$cert" ]] || continue
+            if _cert_matches_domain "$cert"; then
+                if key="$(_find_key_for_cert "$cert")" && [[ -f "$key" ]]; then
+                    printf '%s|%s' "$cert" "$key"
+                    return 0
+                fi
+            fi
+        done
+    done
+    return 1
 }
 
-_has_cf_creds() {
-    local cf_email cf_key
-    cf_email="$(config_get CF_EMAIL 2>/dev/null)" || cf_email=""
-    cf_key="$(config_get CF_API_KEY 2>/dev/null)" || cf_key=""
-    [[ -n "$cf_email" && -n "$cf_key" ]]
-}
-
 # ---------------------------------------------------------------------------
-# Self-signed bootstrap for Cloudflare proxy
-#
-# Problem: when CF proxy is ON and "Always Use HTTPS" redirects all HTTP
-# (including /.well-known/acme-challenge), CF needs to reach origin :443.
-# On a fresh VPS there is no cert yet → 521 → HTTP-01 fails.
-#
-# Fix: install a 1-day self-signed cert and add listen 443 ssl to the vhost,
-# so CF (Full, not Strict) can reach origin over HTTPS and forward the ACME
-# challenge. Certbot then replaces the self-signed with the real LE cert.
+# Bootstrap nginx :443 using an existing cert so Cloudflare Full (Strict)
+# accepts the origin, allowing LE HTTP-01 to validate via the 301→HTTPS path.
 # ---------------------------------------------------------------------------
-_bootstrap_selfsigned_ssl() {
-    local ss_dir="/etc/ssl/azwp-bootstrap"
-    local ss_cert="$ss_dir/cert.pem"
-    local ss_key="$ss_dir/key.pem"
+_bootstrap_nginx_with_cert() {
+    local src_cert="$1" src_key="$2"
     local conf="/etc/nginx/sites-available/${DOMAIN}.conf"
 
-    [[ ! -f "$conf" ]] && { log_error "nginx vhost not found: $conf"; return 1; }
+    [[ -f "$conf" ]] || { log_error "nginx vhost not found: $conf"; return 1; }
 
-    # Skip bootstrap if vhost already has :443 ssl (real cert or prior bootstrap)
-    if grep -qE '^\s*listen\s+443\s+ssl' "$conf"; then
-        log_sub "Bootstrap: vhost already has :443 ssl — skipping"
-        return 0
+    log_sub "Bootstrap: reusing existing cert → $(basename "$(dirname "$src_cert")")/$(basename "$src_cert")"
+
+    mkdir -p "$AZWP_SSL_BOOTSTRAP_DIR"
+    chmod 700 "$AZWP_SSL_BOOTSTRAP_DIR"
+    cp "$src_cert" "$AZWP_SSL_BOOTSTRAP_DIR/cert.pem"
+    cp "$src_key"  "$AZWP_SSL_BOOTSTRAP_DIR/key.pem"
+    chmod 600 "$AZWP_SSL_BOOTSTRAP_DIR/key.pem"
+
+    # Inject :443 block if the vhost does not already have one
+    if ! grep -qE '^\s*listen\s+443\s+ssl' "$conf"; then
+        local ssl_block="    listen 443 ssl;
+    listen [::]:443 ssl;
+    ssl_certificate ${AZWP_SSL_BOOTSTRAP_DIR}/cert.pem;
+    ssl_certificate_key ${AZWP_SSL_BOOTSTRAP_DIR}/key.pem;"
+
+        awk -v block="$ssl_block" '
+            {print}
+            /listen \[::\]:80;/ && !done {print block; done=1}
+        ' "$conf" > "${conf}.tmp" && mv "${conf}.tmp" "$conf"
     fi
 
-    log_sub "Bootstrap: generating self-signed cert (CF Full mode requires origin :443)"
-    mkdir -p "$ss_dir"
-    chmod 700 "$ss_dir"
-    openssl req -x509 -newkey rsa:2048 -nodes \
-        -keyout "$ss_key" -out "$ss_cert" \
-        -days 1 -subj "/CN=${DOMAIN}" \
-        -addext "subjectAltName=DNS:${DOMAIN},DNS:www.${DOMAIN}" \
-        >/dev/null 2>&1
-    chmod 600 "$ss_key"
-
-    local ssl_block="    listen 443 ssl;
-    listen [::]:443 ssl;
-    ssl_certificate ${ss_cert};
-    ssl_certificate_key ${ss_key};"
-
-    # Insert ssl block after the `listen [::]:80;` line
-    awk -v block="$ssl_block" '
-        {print}
-        /listen \[::\]:80;/ && !inserted {print block; inserted=1}
-    ' "$conf" > "${conf}.tmp" && mv "${conf}.tmp" "$conf"
+    # Ensure webroot has the .well-known/acme-challenge path used by certbot --webroot
+    mkdir -p "${WEB_ROOT}/.well-known/acme-challenge"
+    chown -R "$SITE_USER:$SITE_USER" "${WEB_ROOT}/.well-known" 2>/dev/null || true
 
     if ! nginx -t >/dev/null 2>&1; then
-        log_error "Bootstrap: nginx config test failed after injection"
-        nginx -t 2>&1 | head -10
+        log_error "Bootstrap: nginx config test failed"
+        nginx -t 2>&1 | tail -5
         return 1
     fi
     service_reload nginx
-    log_sub "Bootstrap: origin :443 now listening with self-signed cert"
+    log_sub "Bootstrap: origin :443 now serving existing cert"
     return 0
 }
 
-# ---------------------------------------------------------------------------
-# Tier 1: HTTP-01 via --nginx
-# Auto-applies self-signed bootstrap when CF proxy is detected.
-# Honors AZWP_SSL_STAGING=1 env var to use LE staging (no rate limits).
-# ---------------------------------------------------------------------------
-_issue_http01() {
-    local email="$1"
+# After cert is issued, swap nginx to use the new LE cert and remove bootstrap
+_promote_cert_to_nginx() {
+    local new_cert="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+    local new_key="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+    local conf="/etc/nginx/sites-available/${DOMAIN}.conf"
 
-    # Bootstrap :443 if behind CF proxy (required for HTTP-01 to pass through CF)
-    if detect_cloudflare_proxy; then
-        _bootstrap_selfsigned_ssl || log_warn "Bootstrap failed — HTTP-01 may fail"
+    [[ -f "$new_cert" && -f "$new_key" ]] || { log_error "Promote: LE cert not found"; return 1; }
+
+    sed -i "s|${AZWP_SSL_BOOTSTRAP_DIR}/cert.pem|${new_cert}|g" "$conf"
+    sed -i "s|${AZWP_SSL_BOOTSTRAP_DIR}/key.pem|${new_key}|g"   "$conf"
+
+    if ! nginx -t >/dev/null 2>&1; then
+        log_error "Promote: nginx config test failed"
+        return 1
     fi
+    service_reload nginx
+
+    # Bootstrap cert no longer needed for runtime; keep it as a fallback for
+    # future re-issuance so we never get stuck at chicken-and-egg again.
+    log_sub "Promoted to Let's Encrypt cert; bootstrap preserved in ${AZWP_SSL_BOOTSTRAP_DIR}"
+}
+
+# ---------------------------------------------------------------------------
+# Certbot wrappers
+# ---------------------------------------------------------------------------
+_certbot_staging_flag() {
+    [[ "${AZWP_SSL_STAGING:-}" == "1" ]] && echo "--staging"
+}
+
+# Method 1: direct HTTP-01 via --nginx (works when no CF proxy or CF doesn't
+# force HTTPS on ACME path).
+_issue_http01_nginx() {
+    local email="$1" staging
+    staging="$(_certbot_staging_flag)"
 
     local args=(
-        --nginx
-        --non-interactive
-        --agree-tos
+        --nginx --non-interactive --agree-tos
         --preferred-challenges http
         --email "$email"
         -d "$DOMAIN"
     )
     [[ "$WWW_RESOLVES" == "true" ]] && args+=(-d "www.${DOMAIN}")
-    [[ "${AZWP_SSL_STAGING:-}" == "1" ]] && { args+=(--staging); log_sub "Using LE STAGING (test cert)"; }
+    [[ -n "$staging" ]] && args+=("$staging")
 
-    log_sub "Method: HTTP-01 via nginx"
+    log_sub "Method 1: HTTP-01 via nginx"
     certbot "${args[@]}" 2>&1
 }
 
-# ---------------------------------------------------------------------------
-# Tier 2: DNS-01 via Cloudflare plugin
-# ---------------------------------------------------------------------------
-_issue_dns01_cf() {
-    local email="$1"
-
-    if ! _write_cf_creds; then
-        log_error "Cloudflare credentials not configured. Run: azwp advanced cloudflare"
-        return 1
-    fi
-
-    if ! dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
-        log_sub "Installing certbot-dns-cloudflare plugin..."
-        apt_install python3-certbot-dns-cloudflare
-    fi
+# Method 2: webroot HTTP-01 (expects :443 bootstrapped with a valid cert).
+_issue_http01_webroot() {
+    local email="$1" staging
+    staging="$(_certbot_staging_flag)"
 
     local args=(
-        -a dns-cloudflare
-        -i nginx
-        --dns-cloudflare-credentials "$CF_CREDS_FILE"
-        --dns-cloudflare-propagation-seconds 30
-        --non-interactive
-        --agree-tos
+        certonly --webroot -w "$WEB_ROOT"
+        --non-interactive --agree-tos
         --email "$email"
         -d "$DOMAIN"
     )
     [[ "$WWW_RESOLVES" == "true" ]] && args+=(-d "www.${DOMAIN}")
-    [[ "${AZWP_SSL_STAGING:-}" == "1" ]] && { args+=(--staging); log_sub "Using LE STAGING (test cert)"; }
+    [[ -n "$staging" ]] && args+=("$staging")
 
-    log_sub "Method: DNS-01 via Cloudflare API"
+    log_sub "Method 2: HTTP-01 via webroot (reuse-cert bootstrap)"
     certbot "${args[@]}" 2>&1
 }
 
 # ---------------------------------------------------------------------------
-# Post-issue: HSTS header + reload + state
+# Post-issue: HSTS + state + reload
 # ---------------------------------------------------------------------------
 _post_issue_success() {
     local method="$1"
@@ -228,14 +275,14 @@ _post_issue_success() {
     state_set "SSL_TYPE" "letsencrypt"
     state_set "SSL_METHOD_USED" "$method"
 
-    local nginx_conf="/etc/nginx/sites-available/${DOMAIN}.conf"
-    if [[ -f "$nginx_conf" ]] && ! grep -q "Strict-Transport-Security" "$nginx_conf"; then
-        sed -i '/server_tokens off;/a \    add_header Strict-Transport-Security "max-age=63072000" always;' "$nginx_conf"
+    local conf="/etc/nginx/sites-available/${DOMAIN}.conf"
+    if [[ -f "$conf" ]] && ! grep -q "Strict-Transport-Security" "$conf"; then
+        sed -i '/server_tokens off;/a \    add_header Strict-Transport-Security "max-age=63072000" always;' "$conf"
+        service_reload nginx
     fi
 
-    service_reload nginx
     log_sub "Let's Encrypt SSL active for $DOMAIN (method: $method)"
-    log_sub "Auto-renew enabled. Compatible with Cloudflare Full (Strict)."
+    log_sub "Auto-renew enabled via certbot.timer. Compatible with Cloudflare Full (Strict)."
 }
 
 _post_issue_fail() {
@@ -245,22 +292,29 @@ _post_issue_fail() {
     printf "\n"
     printf "  ${YELLOW}How to fix:${NC}\n"
     if detect_cloudflare_proxy 2>/dev/null; then
-        printf "  Your domain is behind Cloudflare proxy. HTTP-01 is blocked by CF\n"
-        printf "  (likely 'Always Use HTTPS' or a Page Rule forcing HTTPS redirect).\n\n"
-        printf "  ${GREEN}Recommended — use DNS-01 challenge (bypasses HTTP entirely):${NC}\n"
-        printf "    1) azwp advanced cloudflare   ${DIM}# configure CF email + Global API Key${NC}\n"
-        printf "    2) azwp ssl issue              ${DIM}# will auto-use DNS-01${NC}\n\n"
-        printf "  ${DIM}Alternative: temporarily disable 'Always Use HTTPS' in CF dashboard,${NC}\n"
-        printf "  ${DIM}then run 'azwp ssl issue', then re-enable.${NC}\n"
+        printf "  Your domain is behind Cloudflare proxy and no existing cert was\n"
+        printf "  found on this VPS to bootstrap the :443 origin.\n\n"
+        printf "  ${GREEN}Pick one of these (ordered by ease):${NC}\n\n"
+        printf "  1) ${BOLD}Reuse an existing cert${NC} (zero Cloudflare action)\n"
+        printf "     Place a valid cert + key for $DOMAIN at:\n"
+        printf "       /tmp/azwp-preinstall/cert.pem\n"
+        printf "       /tmp/azwp-preinstall/privkey.pem\n"
+        printf "     Then run: azwp ssl issue\n\n"
+        printf "  2) ${BOLD}Pause Cloudflare proxy${NC} temporarily (grey cloud)\n"
+        printf "     DNS → click orange cloud on $DOMAIN and www → grey\n"
+        printf "     Run: azwp ssl issue\n"
+        printf "     Click back to orange once cert is issued.\n\n"
+        printf "  3) ${BOLD}Disable 'Always Use HTTPS'${NC} temporarily\n"
+        printf "     CF → SSL/TLS → Edge Certificates → Always Use HTTPS: Off\n"
+        printf "     Run: azwp ssl issue  (then toggle back on)\n\n"
     else
         printf "  Check that DNS points to this VPS and port 80 is reachable,\n"
-        printf "  then retry: azwp ssl issue\n"
+        printf "  then retry: azwp ssl issue\n\n"
     fi
-    printf "\n"
 }
 
 # ---------------------------------------------------------------------------
-# Main: issue certificate (smart dispatcher)
+# Main dispatcher
 # ---------------------------------------------------------------------------
 issue_certificate() {
     local wp_admin_email
@@ -274,67 +328,53 @@ issue_certificate() {
         return 0
     fi
 
-    local method forced output rc
-    forced="$(state_get SSL_METHOD 2>/dev/null)" || forced=""
-    [[ -z "$forced" ]] && forced="auto"
-
-    # Resolve method
-    if [[ "$forced" == "http-01" ]]; then
-        method="http-01"
-    elif [[ "$forced" == "dns-01" ]]; then
-        method="dns-01"
-    else
-        # auto: detect CF + creds
-        if detect_cloudflare_proxy; then
-            log_sub "Cloudflare proxy detected."
-            if _has_cf_creds; then
-                method="dns-01"
-            else
-                method="http-01"
-                log_sub "No CF credentials — will try HTTP-01 first."
-            fi
-        else
-            method="http-01"
-        fi
+    local cf_proxy=false
+    if detect_cloudflare_proxy; then
+        cf_proxy=true
+        log_sub "Cloudflare proxy detected."
     fi
 
     log_sub "Requesting Let's Encrypt certificate..."
 
-    if [[ "$method" == "dns-01" ]]; then
-        if output="$(_issue_dns01_cf "$wp_admin_email")"; then
-            _post_issue_success "dns-01"
+    # ----- Attempt 1: direct HTTP-01 via --nginx -----
+    # Skip this attempt when CF proxy is detected, because CF with default
+    # settings usually redirects HTTP → HTTPS at the edge, making HTTP-01
+    # on :80 fail before it can reach origin.
+    if [[ "$cf_proxy" == "false" ]]; then
+        local output
+        if output="$(_issue_http01_nginx "$wp_admin_email")"; then
+            _post_issue_success "http-01-nginx"
             return 0
         fi
         printf '%s\n' "$output"
-        _post_issue_fail "DNS-01 challenge failed — check CF credentials validity"
-        return 0
+        log_sub "HTTP-01 via nginx failed — trying reuse-cert bootstrap"
     fi
 
-    # HTTP-01 path
-    if output="$(_issue_http01 "$wp_admin_email")"; then
-        _post_issue_success "http-01"
-        return 0
-    fi
-    printf '%s\n' "$output"
-
-    # Auto-fallback: HTTP-01 failed + CF proxy + creds available → try DNS-01
-    if [[ "$forced" == "auto" ]] && detect_cloudflare_proxy && _has_cf_creds; then
-        log_sub "HTTP-01 failed — auto-falling back to DNS-01..."
-        if output="$(_issue_dns01_cf "$wp_admin_email")"; then
-            _post_issue_success "dns-01"
-            return 0
+    # ----- Attempt 2: reuse-existing-cert bootstrap + webroot HTTP-01 -----
+    local existing
+    if existing="$(_find_existing_cert)"; then
+        local src_cert="${existing%|*}" src_key="${existing#*|}"
+        if _bootstrap_nginx_with_cert "$src_cert" "$src_key"; then
+            local output
+            if output="$(_issue_http01_webroot "$wp_admin_email")"; then
+                _promote_cert_to_nginx
+                _post_issue_success "http-01-webroot-bootstrap"
+                return 0
+            fi
+            printf '%s\n' "$output"
+            log_sub "Webroot HTTP-01 failed after bootstrap"
         fi
-        printf '%s\n' "$output"
-        _post_issue_fail "Both HTTP-01 and DNS-01 failed"
-        return 0
+    else
+        log_sub "No existing cert found to bootstrap :443"
     fi
 
-    _post_issue_fail "HTTP-01 challenge failed"
+    # ----- Fail -----
+    _post_issue_fail "All methods failed"
     return 0
 }
 
 # ---------------------------------------------------------------------------
-# Setup SSL auto-renewal
+# Renewal hook
 # ---------------------------------------------------------------------------
 setup_ssl_renewal() {
     log_sub "Configuring SSL auto-renewal..."
