@@ -311,12 +311,12 @@ menu_wordpress() {
             if [[ -z "$up_sub" ]]; then
                 _header "Update"
                 printf "  ${BOLD}AffiliateCMS:${NC}\n"
-                printf "    1) Pull + Update All    (pull latest from GitHub + install all)\n"
+                printf "    1) Pull + Update All    (pull latest + install, ${DIM}excludes child theme${NC})\n"
                 printf "    2) Pro plugin           affiliatecms-pro\n"
                 printf "    3) Categories plugin    affiliatecms-cat\n"
                 printf "    4) AI plugin            affiliatecms-ai\n"
                 printf "    5) Theme (parent)       affiliateCMS-theme\n"
-                printf "    6) Child Theme          affiliateCMS-Child-theme\n"
+                printf "    6) Child Theme          affiliateCMS-Child-theme ${DIM}(customized, manual only)${NC}\n"
                 printf "\n  ${BOLD}WordPress:${NC}\n"
                 printf "    7) WP Core + WP plugins + WP themes (from wordpress.org)\n"
                 printf "\n  ${BOLD}Utilities:${NC}\n"
@@ -2721,8 +2721,8 @@ menu_update() {
         printf "    2) cat          AffiliateCMS Categories plugin\n"
         printf "    3) ai           AffiliateCMS AI plugin\n"
         printf "    4) theme        AffiliateCMS Theme (parent)\n"
-        printf "    5) child-theme  AffiliateCMS Child Theme\n"
-        printf "    6) all          Update everything\n"
+        printf "    5) child-theme  AffiliateCMS Child Theme ${DIM}(customized, manual only)${NC}\n"
+        printf "    6) all          Update everything ${DIM}(excludes child theme)${NC}\n"
         printf "\n  ${BOLD}Other:${NC}\n"
         printf "    7) pull         Pull latest packages from GitHub\n"
         printf "    8) pull-update  Pull + update all components\n"
@@ -2742,15 +2742,20 @@ menu_update() {
             _update_component "$sub"
             ;;
         all)
+            # Child theme is customized per-site during install (domain,
+            # branding in functions.php) — excluded from "all" so updates
+            # don't wipe user customizations. Use menu option 5/child-theme
+            # explicitly when you want to reinstall it from the clone zip.
             for comp in "${_ACMS_COMPONENTS[@]}"; do
                 IFS='|' read -r short _ _ _ <<< "$comp"
+                [[ "$short" == "child-theme" ]] && continue
                 _update_component "$short"
             done
             _update_seed_prompts
             log_info "Purging caches..."
             sudo -u "$SITE_USER" wp cache flush --path="$WEB_ROOT" 2>/dev/null || true
             [[ -d "$CACHE_PATH" ]] && rm -rf "${CACHE_PATH:?}"/* 2>/dev/null || true
-            log_success "All components updated."
+            log_success "All components updated (child theme skipped — customized)."
             ;;
         pull)
             _update_pull
