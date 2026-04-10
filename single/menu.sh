@@ -1688,11 +1688,28 @@ _advanced_action() {
             local ssl_sub="${extra}"
             if [[ -z "$ssl_sub" ]]; then
                 _header "SSL Management"
-                printf "  1) Issue/renew certificate\n"
+                # Status line
+                local _cur_method _cur_cf_creds _cf_state="missing"
+                _cur_method="$(state_get SSL_METHOD 2>/dev/null)" || _cur_method="auto"
+                if [[ -n "$(config_get CF_EMAIL 2>/dev/null)" && -n "$(config_get CF_API_KEY 2>/dev/null)" ]]; then
+                    _cf_state="configured"
+                fi
+                printf "  ${DIM}Method: %s  |  Cloudflare creds: %s${NC}\n\n" "$_cur_method" "$_cf_state"
+                printf "  1) Issue/renew certificate (auto-detect)\n"
                 printf "  2) Certificate info\n"
+                printf "  3) Force method: auto (detect)\n"
+                printf "  4) Force method: HTTP-01 (nginx)\n"
+                printf "  5) Force method: DNS-01 (Cloudflare)\n"
                 printf "  0) Back\n\n"
                 read -rp "  Choose: " ssl_sub
-                case "$ssl_sub" in 1) ssl_sub="issue" ;; 2) ssl_sub="info" ;; *) return 0 ;; esac
+                case "$ssl_sub" in
+                    1) ssl_sub="issue" ;;
+                    2) ssl_sub="info" ;;
+                    3) ssl_sub="method-auto" ;;
+                    4) ssl_sub="method-http01" ;;
+                    5) ssl_sub="method-dns01" ;;
+                    *) return 0 ;;
+                esac
             fi
             case "$ssl_sub" in
                 issue|renew)
@@ -1702,6 +1719,22 @@ _advanced_action() {
                 info)
                     echo | openssl s_client -connect localhost:443 -servername "$DOMAIN" 2>/dev/null \
                         | openssl x509 -noout -subject -issuer -dates 2>/dev/null || log_warn "No SSL cert found."
+                    ;;
+                method-auto)
+                    state_set "SSL_METHOD" "auto"
+                    log_success "SSL method set to: auto (detect CF proxy + creds)"
+                    ;;
+                method-http01)
+                    state_set "SSL_METHOD" "http-01"
+                    log_success "SSL method set to: http-01 (via nginx)"
+                    ;;
+                method-dns01)
+                    if [[ -z "$(config_get CF_EMAIL 2>/dev/null)" || -z "$(config_get CF_API_KEY 2>/dev/null)" ]]; then
+                        log_warn "Cloudflare credentials not set. Run: azwp advanced cloudflare"
+                        return 0
+                    fi
+                    state_set "SSL_METHOD" "dns-01"
+                    log_success "SSL method set to: dns-01 (via Cloudflare API)"
                     ;;
             esac
             ;;

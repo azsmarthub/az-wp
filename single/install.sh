@@ -313,10 +313,10 @@ step_wordpress() {
         log_sub "Creating wp-config.php..."
         if [[ -f "$clone_dir/wp-config-template.php" ]]; then
             cp "$clone_dir/wp-config-template.php" "$WEB_ROOT/wp-config.php"
-            sed -i "s|CLONE_DB_NAME|${DB_NAME}|g" "$WEB_ROOT/wp-config.php"
-            sed -i "s|CLONE_DB_USER|${DB_USER}|g" "$WEB_ROOT/wp-config.php"
-            sed -i "s|CLONE_DB_PASS|${DB_PASS}|g" "$WEB_ROOT/wp-config.php"
-            sed -i "s|CLONE_DOMAIN|${DOMAIN}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|{{DB_NAME}}|${DB_NAME}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|{{DB_USER}}|${DB_USER}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|{{DB_PASSWORD}}|${DB_PASS}|g" "$WEB_ROOT/wp-config.php"
+            sed -i "s|{{DOMAIN}}|${DOMAIN}|g" "$WEB_ROOT/wp-config.php"
         else
             sudo -u "$SITE_USER" wp config create --path="$WEB_ROOT" \
                 --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASS" \
