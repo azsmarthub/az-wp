@@ -628,13 +628,24 @@ print_summary() {
         printf "  ${RED}!!${NC}  Services      %s/%s active\n" "$svc_ok" "$svc_total"
     fi
 
-    # SSL
-    local ssl_info
+    # SSL — read actual type from state (set by lib/ssl.sh)
+    local ssl_type ssl_info ssl_label
+    ssl_type="$(state_get SSL_TYPE 2>/dev/null)" || ssl_type=""
     ssl_info="$(echo | openssl s_client -connect localhost:443 -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)" || ssl_info=""
-    if [[ -n "$ssl_info" ]]; then
-        printf "  ${GREEN}OK${NC}  SSL           Let's Encrypt (expires: %s)\n" "$ssl_info"
+
+    case "$ssl_type" in
+        letsencrypt)            ssl_label="Let's Encrypt" ;;
+        self-signed)            ssl_label="Self-signed (CF edge handles visitor cert)" ;;
+        self-signed-not-verified) ssl_label="Self-signed (CF rejected — see warning above)" ;;
+        *)                      ssl_label="" ;;
+    esac
+
+    if [[ -n "$ssl_info" && -n "$ssl_label" ]]; then
+        printf "  ${GREEN}OK${NC}  SSL           %s (expires: %s)\n" "$ssl_label" "$ssl_info"
+    elif [[ -n "$ssl_info" ]]; then
+        printf "  ${GREEN}OK${NC}  SSL           Installed (expires: %s)\n" "$ssl_info"
     else
-        printf "  ${YELLOW}--${NC}  SSL           Not issued (run: azwp advanced ssl issue)\n"
+        printf "  ${YELLOW}--${NC}  SSL           Not issued (run: azwp ssl issue)\n"
     fi
 
     # Redis
