@@ -2711,6 +2711,104 @@ _update_seed_prompts() {
         || log_warn "Could not seed prompts (plugin may not be active)."
 }
 
+# ===========================================================================
+# FIX - one-shot migrations for existing sites after pulling new azwp code
+# ===========================================================================
+
+# Patch the old anti-enumeration rule on /wp-json/wp/v2/users that broke
+# Gutenberg's Author dropdown (it fetches context=view&who=authors and got
+# a flat 403 from nginx before reaching WordPress). Replaces the block
+# with a cookie-aware version: anonymous still 403, logged-in users pass
+# through to WP which applies its own capability check.
+_fix_nginx_users_rule() {
+    local conf="/etc/nginx/sites-available/${DOMAIN}.conf"
+    [[ -f "$conf" ]] || { log_error "nginx vhost not found: $conf"; return 1; }
+
+    if grep -q 'users_allowed' "$conf"; then
+        log_info "Nginx users rule already patched — nothing to do."
+        return 0
+    fi
+
+    if ! grep -q 'arg_context != "edit"' "$conf"; then
+        log_warn "Old users rule signature not found in $conf — skipping."
+        return 0
+    fi
+
+    local new_block
+    new_block=$(cat <<NGBLOCK
+    # Block anonymous user enumeration via REST API, allow logged-in users.
+    location ~ ^/wp-json/wp/v2/users {
+        set \$users_allowed 0;
+        if (\$http_cookie ~* "wordpress_logged_in_") { set \$users_allowed 1; }
+        if (\$arg_context = "edit") { set \$users_allowed 1; }
+        if (\$users_allowed != 1) { return 403; }
+
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root/index.php;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
+    }
+NGBLOCK
+)
+
+    # Replace the whole block using brace counting (handles nested {} from the
+    # inner `if (...)` directives correctly).
+    awk -v new_block="$new_block" '
+        /^[[:space:]]*location ~ \^\/wp-json\/wp\/v2\/users \{/ {
+            print new_block
+            depth = 1
+            in_block = 1
+            # Swallow the opening brace from the original line
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (c == "{") depth_adj = 1
+            }
+            next
+        }
+        in_block {
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (c == "{") depth++
+                if (c == "}") depth--
+            }
+            if (depth <= 0) { in_block = 0 }
+            next
+        }
+        { print }
+    ' "$conf" > "${conf}.tmp" && mv "${conf}.tmp" "$conf"
+
+    if ! nginx -t >/dev/null 2>&1; then
+        log_error "nginx config test failed after patch"
+        nginx -t 2>&1 | tail -5
+        return 1
+    fi
+    service_reload nginx
+    log_success "Patched nginx users rule in ${conf}"
+    log_sub "Gutenberg author dropdown should now populate correctly for logged-in users."
+}
+
+menu_fix() {
+    local sub="${1:-}"
+
+    if [[ -z "$sub" ]]; then
+        _header "Fix — one-shot migrations"
+        printf "  ${DIM}Apply migrations after 'azwp update pull' brings new code.${NC}\n\n"
+        printf "  1) nginx-users   Patch /wp-json/wp/v2/users rule (fix Gutenberg author dropdown)\n"
+        printf "  0) Back\n\n"
+        read -rp "  Choose: " sub
+        case "$sub" in 1) sub="nginx-users" ;; *) return 0 ;; esac
+    fi
+
+    case "$sub" in
+        nginx-users)
+            _fix_nginx_users_rule
+            ;;
+        *)
+            log_warn "Unknown fix: $sub"
+            printf "  Usage: azwp fix [nginx-users]\n"
+            ;;
+    esac
+}
+
 menu_update() {
     local sub="${1:-}"
 
@@ -2802,6 +2900,7 @@ main() {
             advanced) menu_advanced "${2:-}" "${3:-}" ;;
             help|-h|--help) menu_help ;;
             update)   menu_update "${2:-}" ;;
+            fix)      menu_fix "${2:-}" ;;
             # Shortcuts
             login)    _wp_auto_login ;;
             pma)      menu_database pma ;;

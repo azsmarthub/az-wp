@@ -29,10 +29,20 @@ server {
     location ~ /readme\.(html|txt)$ { deny all; }
     location ~ /license\.txt$ { deny all; }
 
-    # Block user enumeration via REST API
+    # Block anonymous user enumeration via REST API, allow logged-in users.
+    # The old rule "if ($arg_context != edit) return 403" broke Gutenberg's
+    # Author dropdown — the block editor fetches /wp-json/wp/v2/users with
+    # context=view&who=authors, nginx 403'd the request, and the dropdown
+    # stayed empty. Letting any request with a wordpress_logged_in_* cookie
+    # through keeps the anti-enumeration protection for anonymous visitors
+    # while letting authenticated admin UI calls reach WordPress (which
+    # then applies its own capability checks).
     location ~ ^/wp-json/wp/v2/users {
-        if ($arg_context != "edit") { return 403; }
-        # Allow only authenticated edit context (WP admin needs this)
+        set $users_allowed 0;
+        if ($http_cookie ~* "wordpress_logged_in_") { set $users_allowed 1; }
+        if ($arg_context = "edit") { set $users_allowed 1; }
+        if ($users_allowed != 1) { return 403; }
+
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root/index.php;
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-web.sock;
