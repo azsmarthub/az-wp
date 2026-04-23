@@ -2891,7 +2891,7 @@ main() {
     if [[ $# -gt 0 ]]; then
         case "$1" in
             status)   menu_status ;;
-            wp)       menu_wordpress "${2:-}" ;;
+            wp)       menu_wordpress "${2:-}" "${3:-}" ;;
             db)       menu_database "${2:-}" "${3:-}" ;;
             cache)    menu_cache "${2:-}" ;;
             backup)   menu_backup "${2:-}" "${3:-}" ;;
