@@ -363,15 +363,30 @@ menu_wordpress() {
                 wp_run config set WP_DEBUG_LOG false --raw > /dev/null
                 log_success "Debug mode → OFF."
             else
-                # Show status only, ask to toggle
+                # Show status + interactive toggle menu
                 if $is_on; then
                     printf "  Debug mode: ${YELLOW}ON${NC}\n"
                     printf "  Log: %s/wp-content/debug.log\n" "$WEB_ROOT"
-                    printf "\n  Turn off? ${DIM}azwp wp debug off${NC}\n"
                 else
                     printf "  Debug mode: ${GREEN}OFF${NC}\n"
-                    printf "\n  Turn on? ${DIM}azwp wp debug on${NC}\n"
                 fi
+                printf "\n  1) Turn ON\n"
+                printf "  2) Turn OFF\n"
+                printf "  0) Back\n\n"
+                local choice; read -rp "  Choose: " choice
+                case "$choice" in
+                    1)
+                        wp_run config set WP_DEBUG true --raw > /dev/null
+                        wp_run config set WP_DEBUG_LOG true --raw > /dev/null
+                        log_success "Debug mode → ON. Logs: $WEB_ROOT/wp-content/debug.log"
+                        ;;
+                    2)
+                        wp_run config set WP_DEBUG false --raw > /dev/null
+                        wp_run config set WP_DEBUG_LOG false --raw > /dev/null
+                        log_success "Debug mode → OFF."
+                        ;;
+                    *) return 0 ;;
+                esac
             fi
             ;;
         maintenance)
